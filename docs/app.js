@@ -688,6 +688,14 @@
   // heading, since that is the part a reader is looking for.
   function attachmentBodyHtml(attachment) {
     return '<div class="callout"><h3>' + esc(TEXT.attachmentPrefix) + esc(attachment.style) + '</h3>' +
+      // What the style is good at, directly under the name of it. Deliberately
+      // first: the four names carry a lot of received meaning, and a reader who
+      // has just been told they are anxious or fearful-avoidant reads the next
+      // paragraph through whatever they already believe that means. One warm,
+      // specific sentence in that position does more for how the section lands
+      // than any amount of care further down. Optional, so a report generated
+      // before this field existed still renders.
+      (attachment.styleTone ? '<p class="attachment-tone">' + esc(attachment.styleTone) + '</p>' : '') +
       '<p>' + esc(attachment.why) + '</p>' +
       ((attachment.derivedFrom || []).length
         ? '<p class="essence-label">' + esc(TEXT.readFrom) + '</p>' +

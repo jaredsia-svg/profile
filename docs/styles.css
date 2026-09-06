@@ -1171,6 +1171,12 @@ th { color: var(--ink-soft); font-weight: 600; font-size: .84rem; }
 }
 .callout h3 { margin-top: 0; }
 .callout p:last-child { margin-bottom: 0; }
+/* The one warm line about what this attachment style is good at, sitting
+   directly under its name. Weighted a little heavier than the reasoning that
+   follows so it reads as part of the heading rather than as the first
+   sentence of the argument — a reader who has just been handed one of four
+   loaded words should meet this before they meet the working. */
+.attachment-tone { font-weight: 600; margin-top: -.2rem; }
 
 ul.ticks { list-style: none; padding-left: 0; margin: .4rem 0 0; }
 ul.ticks li { position: relative; padding-left: 1.5rem; margin-bottom: .4rem; }

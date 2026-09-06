@@ -4941,6 +4941,23 @@ try {
     /honest verdict on what kind of partner/i.test(unlocked.text) &&
     unlocked.coverHidden && unlocked.expanded === 'true',
     unlocked.text.slice(0, 200));
+  // The strengths line under the attachment style name, on screen rather than
+  // only in the schema. It carries the whole tone of that section: the four
+  // style names arrive loaded, and somebody just told they lean anxious or
+  // fearful-avoidant reads everything after it through whatever they already
+  // believe the word means. A field generated on every paid run and rendered
+  // nowhere would be the quiet way this addition fails, so both halves are
+  // checked — that it appears, and that it appears *before* the reasoning.
+  const attachmentText = await page.evaluate(() =>
+    document.querySelector('#profile-body .attachment-card .premium-body').innerText);
+  check('the attachment section leads with what the style is good at',
+    /genuinely good at/i.test(attachmentText), attachmentText.slice(0, 160));
+  check('and it sits above the reasoning rather than after it',
+    attachmentText.indexOf('genuinely good at') > -1 &&
+    attachmentText.indexOf('genuinely good at') <
+      attachmentText.indexOf('Mock reasoning showing the working'),
+    attachmentText.slice(0, 200));
+
   // The wellness read carries the same "not an assessment" caveat the roast
   // used to, for the same reason: it is the paid section closest to health.
   check('the wellness caveat stays on screen beside the writing',

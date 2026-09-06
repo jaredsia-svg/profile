@@ -1430,7 +1430,15 @@ check('a language can be marked minor rather than invented',
 // not drift apart.
 const attachProps = prompts.PREMIUM_SCHEMA.properties.attachment.properties;
 check('attachment shows its working',
-  ['style', 'why', 'derivedFrom', 'implications', 'caveat'].every(k => k in attachProps));
+  ['style', 'styleTone', 'why', 'derivedFrom', 'implications', 'caveat'].every(k => k in attachProps));
+// The strengths line has to be rendered as well as generated. A schema field
+// nothing reads is a field the model is paid for on every run and nobody ever
+// sees, which is the quiet way this kind of addition fails.
+check('and the strengths line is actually rendered, not just asked for',
+  /attachment\.styleTone/.test(readFileSync(join(root, 'docs', 'app.js'), 'utf8')));
+check('and it names both halves of what an implication has to carry',
+  /what a partner will feel/.test(attachProps.implications.description) &&
+  /at least one should be something this style gives/i.test(attachProps.implications.description));
 check('attachment names the signals it rests on',
   /Name the actual numbers or patterns/.test(attachProps.derivedFrom.description));
 check('attachment spells out what it means for a partner',
@@ -4049,27 +4057,46 @@ check('the schema requires evidence on strengths and frictions',
   const both = prompts.PROFILE_SYSTEM + '\n' + prompts.PREMIUM_SYSTEM +
     '\n' + JSON.stringify(prompts.PROFILE_SCHEMA) + '\n' + JSON.stringify(prompts.PREMIUM_SCHEMA);
 
-  // Attachment style, described rather than diagnosed. "Fearful-avoidant" and
-  // "disorganised" are categories out of instruments a clinician administers
-  // to someone who agreed to be assessed; printed off an Instagram export they
-  // are severe, unearned, and read as a verdict on a person rather than an
-  // account of a habit.
-  check('the prompt forbids the clinical attachment labels by name',
-    /fearful-avoidant/i.test(both) && /disorganised/i.test(both) &&
-    /dismissive-avoidant/i.test(both) && /anxious-preoccupied/i.test(both),
-    'named: ' + ['fearful-avoidant', 'disorganised', 'dismissive-avoidant', 'anxious-preoccupied']
-      .filter(label => new RegExp(label, 'i').test(both)).join(', '));
-  // Named in order to be banned, not offered as examples — so each one has to
-  // sit near a prohibition rather than near an "e.g.".
-  check('and names them only to rule them out',
-    [/fearful-avoidant/i, /disorganised/i, /dismissive-avoidant/i, /anxious-preoccupied/i]
-      .every(label => {
-        const at = both.search(label);
-        const window = both.slice(Math.max(0, at - 260), at);
-        return /never|not |no "/i.test(window);
-      }));
-  check('and offers the behavioural phrasing in its place',
-    /anxious-leaning/i.test(both) && /leans secure/i.test(both));
+  // Attachment style names the standard four.
+  //
+  // This reverses an earlier rule that banned them, and the reversal is worth
+  // recording rather than quietly swapping. The ban was defensible — those
+  // words come from instruments a clinician administers to someone who agreed
+  // to be assessed — but it cost the reader more than it saved them: a person
+  // told they "lean anxious" can look that up, recognise themselves or not,
+  // and talk to a partner about it, where an invented phrase leaves them
+  // holding nothing. The severity the ban was aimed at is now handled by tone
+  // instead of by omission, which the checks below are what hold in place.
+  check('the prompt names the standard attachment styles',
+    /fearful-avoidant/i.test(both) && /\bavoidant\b/i.test(both) &&
+    /\banxious\b/i.test(both) && /\bsecure\b/i.test(both),
+    'named: ' + ['fearful-avoidant', 'avoidant', 'anxious', 'secure']
+      .filter(label => new RegExp('\\b' + label + '\\b', 'i').test(both)).join(', '));
+  // As leanings rather than categories, which is the whole of what the ban was
+  // really protecting: the difference between describing how somebody has been
+  // behaving and declaring what they are.
+  check('and asks for them as leanings, not as categories',
+    /anxious-leaning/i.test(both) && /leans secure/i.test(both) &&
+    /\bleaning\b/i.test(both));
+
+  // Tone, in the one section where it is a correctness requirement rather
+  // than a nicety. These four words arrive loaded, and a reader meets whatever
+  // they already believe the word means before they meet a line of the
+  // reasoning — so the prompt has to insist on the strengths first, and on the
+  // style being something that moves.
+  check('the attachment section is told to lead with what the style is good at',
+    /styleTone/.test(JSON.stringify(prompts.PREMIUM_SCHEMA)) &&
+    /good at/i.test(both) && /strengths/i.test(both));
+  check('and that fearful-avoidant in particular is not written as a defect',
+    /survivable/i.test(both) && /not a broken one/i.test(both));
+  check('and that secure is not framed as the one the others failed to win',
+    /not a prize/i.test(both));
+  check('and that attachment is the most changeable thing in the report',
+    /most changeable/i.test(both));
+  // The failure mode named outright, because "be encouraging" without one is
+  // guidance a model can satisfy while still handing somebody a verdict.
+  check('and that prescribing, or writing as though the label settles their future, is the failure',
+    /failure mode/i.test(both) && /prescrib/i.test(both));
 
   // Names of private individuals, including inside quoted evidence. The rule
   // existed already but only inside one section's guidance, which left the
