@@ -533,8 +533,14 @@ export function buildTakeoutZip() {
   // times there, ahead of anything the reader actually looked for.
   const assistantNoise = Array.from({ length: 2000 }, (_, i) => ({
     header: 'Assistant',
-    title: ['Searched for an image', 'Invoked Circle to Search',
-      'Received "time to leave" notification', 'Dismissed an assistant notification'][i % 4],
+    // The phrasings a real export actually produces once the verb stripper is
+    // working. These changed shape when it was fixed — "Searched with an
+    // image" reached the filter as "an image" while the stripper was eating a
+    // second word, and as "with an image" once it stopped — so the fixture
+    // carries the corrected forms and a couple of the older ones with it.
+    title: ['Searched with an image', 'Used Google Search', 'Invoked Circle to Search',
+      'Searched with an image in Arts & Entertainment', 'Used Assistant',
+      'Received "time to leave" notification', 'Dismissed an assistant notification'][i % 7],
     time: at(i % 300, 9),
     products: ['Assistant'],
   }));
@@ -559,7 +565,13 @@ export function buildTakeoutZip() {
 
   const gemini = Array.from({ length: 120 }, (_, i) => ({
     header: 'Gemini Apps',
-    title: 'Prompted Help me plan a training week around a Saturday long run, number ' + i,
+    // Every fourth one is multi-line, which is the ordinary shape of a pasted
+    // email or a code block — and the shape whose verb survived, because `.`
+    // does not cross a newline and the whole pattern failed rather than
+    // matching less.
+    title: i % 4 === 0
+      ? 'Prompted Please rewrite this note\nHi Gabriel,\nHope all is well. Number ' + i
+      : 'Prompted Help me plan a training week around a Saturday long run, number ' + i,
     time: at(i % 300, 21),
     products: ['Gemini Apps'],
   }));

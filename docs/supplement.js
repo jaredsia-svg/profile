@@ -150,14 +150,34 @@
   // watch link is not something to reason about.
   const ACTIVITY_VERB = /^\s*(?:watched|searched|visited|prompted|used|viewed)\s+(?:for\s+)?(.{4,})$/i;
 
-  // Interface events that arrive filed as searches. Anchored and specific
-  // rather than a keyword sweep: "an image" has to be the whole string,
-  // because somebody really can search for "an image of a barn owl", and a
-  // notification phrase has to say notification. A filter loose enough to
-  // catch a real question is worse than the noise it removes.
+  // Interface events that arrive filed as searches.
+  //
+  // Anchored and specific rather than a keyword sweep. "an image" has to be
+  // the whole string, because somebody really can search for "an image of a
+  // barn owl" — a first pass at this used `^(with )?an image\b` and caught
+  // exactly that. A filter loose enough to take a real question is worse than
+  // the noise it removes, so each pattern here is either an exact string or a
+  // prefix no real query starts with.
+  //
+  // Written against what the *fixed* verb stripper produces, which is not what
+  // the broken one produced. The first version of this list was built from a
+  // real export's output while `stripLeadingVerb` was still eating a second
+  // word: "Searched with an image" reached it as "an image", so that is what
+  // it matched. With the stripper corrected the same records arrive as "with
+  // an image" and sailed straight past — 9,774 of them, back at the top of the
+  // list. Two fixes in one change, each quietly moving the other's target.
+  //
+  // These are searches whose query text Google did not record: a reverse image
+  // lookup, an app being opened, the Assistant being woken. They are real
+  // activity and they stay in `counts.googleSearches`; what they are not is
+  // *terms*, and a term histogram is the one place they cannot go.
   const NOT_A_QUERY = [
     /^an image$/i,
+    /^with an image\b/i,
+    /^image search$/i,
     /^search(es)?$/i,
+    /^google (search|maps|lens|photos|assistant)$/i,
+    /^assistant$/i,
     /^invoked\b/i,
     /^(received|dismissed|opened|closed|shown)\b.*\bnotification/i,
     /^(activated|woke|used)\b.*\bassistant/i,
@@ -168,7 +188,13 @@
     return !NOT_A_QUERY.some(pattern => pattern.test(text));
   }
   function stripLeadingVerb(title) {
-    const clean = String(title || '');
+    // Whitespace collapsed *before* matching, not after. `.` does not cross a
+    // newline, so a multi-line title failed the pattern outright and came
+    // through with its verb intact — which is most Gemini prompts, since a
+    // pasted email or a code block is the normal shape of one, and any video
+    // title that happened to wrap. trimText does this same collapse a moment
+    // later, so nothing is lost by doing it here first.
+    const clean = String(title || '').replace(/\s+/g, ' ').trim();
     const match = clean.match(ACTIVITY_VERB);
     return (match ? match[1] : clean).replace(/\s*https?:\/\/\S+\s*$/i, '').trim();
   }

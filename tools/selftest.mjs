@@ -2487,7 +2487,8 @@ const google = await Supplement.readGoogle(
 // and is never run looks exactly like one that works.
 {
   const terms = [...google.googleSearchTerms.keys()];
-  const noise = terms.filter(t => /^an image$|^invoked|notification/i.test(t));
+  const noise = terms.filter(t =>
+    /^an image$|^with an image|^invoked|notification|^google (search|maps)$|^assistant$/i.test(t));
   check('interface events never become search terms',
     noise.length === 0, noise.slice(0, 4).join(' | '));
   check('and the real searches beside them still do',
@@ -2995,6 +2996,29 @@ check('but the count it was read for still is',
     'https://www.propertyguru.com.sg/project/parc-emily-120']) {
     check('"' + junk.slice(0, 34) + '" is not counted as a search', real(junk) === false);
   }
+  // Multi-line titles. `.` does not cross a newline, so the whole pattern
+  // failed and the verb came through untouched — which is most Gemini prompts,
+  // since a pasted email or a code block is the ordinary shape of one. The
+  // collapse now happens before the match rather than after it.
+  check('a multi-line title has its verb stripped like any other',
+    strip('Prompted Please rewrite this\nHi Gabriel,\nHope all is well.') ===
+      'Please rewrite this Hi Gabriel, Hope all is well.',
+    strip('Prompted Please rewrite this\nHi Gabriel,\nHope all is well.'));
+
+  // The Lens and app-launch phrasings, which are what a real export produces
+  // once the stripper is correct. The first version of this filter was written
+  // against the output of the *broken* stripper — "Searched with an image"
+  // reached it as "an image" — so fixing one silently moved the other's
+  // target, and 9,774 records walked back to the top of the ranked list.
+  for (const junk of ['with an image', 'with an image in arts & entertainment',
+    'google search', 'google maps', 'assistant', 'image search']) {
+    check('"' + junk.slice(0, 34) + '" is not counted as a search', real(junk) === false);
+  }
+  // The one this list must never take, and did on its first attempt: a real
+  // question that happens to start the same way.
+  check('but "an image of a barn owl" is a question and survives',
+    real('an image of a barn owl') === true);
+
   // And the filter has to be narrow enough that a real question survives it,
   // which is the half that would make it worth reverting if it failed.
   for (const query of ['an image of a barn owl', 'usdsgd', 'searching for a flat in bedok',
