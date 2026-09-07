@@ -1442,22 +1442,42 @@ const attachProps = prompts.PREMIUM_SCHEMA.properties.attachment.properties;
 // Both rows are checked, because a re-run replaces Instagram wholesale, so
 // picking only part 1 there swaps a complete archive for half of one — the
 // same mistake with more to lose.
+//
+// The rows say it plainly — "Select multiple files as needed" — rather than
+// explaining the split. Most readers have one file and do not need to be told
+// about a case that does not apply to them; the ones who have several need
+// only to know the picker will take them all. The full explanation lives in
+// the recognition failure below, which is where somebody who got it wrong
+// actually ends up.
 {
   const markup = readFileSync(join(root, 'docs', 'index.html'), 'utf8');
   const rowLine = (/data-datasource="instagram"[\s\S]{0,900}?<span class="muted">([^<]+)</
     .exec(markup) || [])[1] || '';
-  check('the first-upload Instagram row says to select every part at once',
-    /several parts/i.test(globalThis.PsycheCopy.TEXT.dataSourcesFirstInstagram) &&
-    /all at once/i.test(globalThis.PsycheCopy.TEXT.dataSourcesFirstInstagram),
+  const wanted = /select multiple files as needed/i;
+  check('the first-upload Instagram row says more than one file can be picked',
+    wanted.test(globalThis.PsycheCopy.TEXT.dataSourcesFirstInstagram),
     globalThis.PsycheCopy.TEXT.dataSourcesFirstInstagram);
   check('and the report page\'s replace row says it too',
-    /several parts/i.test(rowLine) && /all at once/i.test(rowLine), rowLine.trim());
-  // The recognition failure still names the same remedy. It is the only place
-  // a reader who got it wrong will be told, so the two must not drift into
-  // saying different things about the same archive.
+    wanted.test(rowLine), rowLine.trim());
+  // The one place that explains *why* — reached only by a reader whose
+  // half-loaded export failed the breadth check, which is exactly when the
+  // explanation is worth the words.
   const source = readFileSync(join(root, 'docs', 'instagram.js'), 'utf8');
-  check('and the failure a half-loaded export hits names the same remedy',
+  check('and the failure a half-loaded export hits explains the split in full',
     /several \.zip parts, choose all of them together/i.test(source));
+  // The rows promise a picker that takes more than one file, so the inputs
+  // behind them have to accept more than one. Checked because the promise and
+  // the attribute live in different places and nothing else connects them —
+  // dropping `multiple` would leave the copy lying with nothing to notice it.
+  //
+  // The archive inputs only. #qr-file takes one photograph of a QR code and is
+  // right not to be multiple, so the filter is on what the input accepts
+  // rather than on it being a file input at all.
+  const zipInputs = (markup.match(/<input type="file"[^>]*>/g) || [])
+    .filter(tag => /accept="\.zip/.test(tag));
+  check('and every archive picker behind that promise accepts multiple files',
+    zipInputs.length === 3 && zipInputs.every(tag => / multiple/.test(tag)),
+    zipInputs.join(' | '));
 }
 
 check('attachment shows its working',

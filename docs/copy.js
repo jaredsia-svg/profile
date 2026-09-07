@@ -668,8 +668,8 @@
     // — the tick looks identical either way, and a half-loaded export usually
     // still clears the recognition check and produces a confident report from
     // half the evidence. Saying it here is the cheap half of the fix.
-    dataSourcesFirstInstagram: 'Load your Instagram export .zip file here — ' +
-      'if it arrived as several parts, select them all at once',
+    dataSourcesFirstInstagram: 'Load your Instagram export .zip file here. ' +
+      'Select multiple files as needed.',
     // Only shown once a fresh Instagram export is actually picked — see the
     // reasoning at the call site in app.js for why this cannot always be
     // carried forward automatically.
