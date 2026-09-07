@@ -19,6 +19,9 @@
     captions: 560,
     comments: 360,
     messages: 1000,
+    // The floor a message must clear to take one of those 1,000 places — see
+    // sampleTexts for why this is a quality number and not a size one.
+    messageChars: 15,
     likedAuthors: 240,
     savedAuthors: 120,
     searches: 160,
@@ -310,13 +313,31 @@
   // timestamps sort oldest-first; bare strings all carry ts 0 and a stable
   // sort leaves them in whatever order the parser produced, which is the
   // existing behaviour for comments, messages and the supplementary sources.
-  function sampleTexts(texts, limit, maxChars) {
+  //
+  // `minChars` is the floor a line has to clear to be worth one of the slots.
+  // Four for everything by default — below that a caption is an emoji and a
+  // comment is "ok" — and higher for direct messages, where the cap binds
+  // hardest: a real archive offered 9,741 of the reader's own messages for
+  // 1,000 places, so a slot spent on "Handsum" is a slot not spent on a
+  // sentence. Raising it there is not a size decision and barely moves the
+  // total — 81 of 1,000 messages came in under fifteen characters and they
+  // were 0.4% of the digest between them, because short messages are short.
+  // It is a *quality* decision, and it only pays because the cap binds: where
+  // an account has fewer messages than places for them, this simply loses
+  // texture and gains nothing.
+  //
+  // What it does not lose is the fact that somebody writes briefly.
+  // `averageSentLength` is measured over every message they ever sent, not
+  // over this sample, so the statistic survives whatever the floor does to the
+  // texture beside it.
+  function sampleTexts(texts, limit, maxChars, minChars) {
+    const floor = minChars || 4;
     const cleaned = [];
     const seen = new Set();
     for (const item of texts) {
       const dated = Boolean(item) && typeof item === 'object';
       const value = trim(dated ? item.text : item, maxChars);
-      if (value.length < 4 || seen.has(value)) continue;
+      if (value.length < floor || seen.has(value)) continue;
       seen.add(value);
       const ts = dated && Number.isFinite(item.ts) && item.ts > 0 ? item.ts : 0;
       const year = dated ? yearOf(item.ts) : '';
@@ -600,7 +621,13 @@
         // per character as a sentence does: 44 of 1,000 messages in a real
         // export carried one, at 6,400 characters between them. What surrounds
         // a link is the evidence, so the message is kept and the URL is not.
-        ownMessageSample: sampleTexts(messages.ownTexts.map(stripLinks), LIMITS.messages, 240),
+        ownMessageSample: sampleTexts(
+          // Tolerant of both shapes: instagram.js now sends `{text, ts}`, and
+          // a bare string is still what a hand-built fixture passes.
+          messages.ownTexts.map(m => (m && typeof m === 'object'
+            ? { ...m, text: stripLinks(m.text) }
+            : stripLinks(m))),
+          LIMITS.messages, 240, LIMITS.messageChars),
       };
       digest.coverage.sampling.ownMessages = {
         shown: digest.directMessages.ownMessageSample.length,

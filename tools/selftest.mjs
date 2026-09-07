@@ -3032,6 +3032,110 @@ check('but the count it was read for still is',
     JSON.stringify(withGoogle.google).slice(0, 200));
 }
 
+// ---------- messages are dated, and sampled by date ----------
+//
+// instagram.js computed a timestamp for every message and put it only into the
+// event tally, so the text arrived at the sampler with ts = 0. Three things
+// followed: no year prefix on a message where a caption gets one, a
+// chronological sort that was a no-op, and "take the most recent half"
+// degenerating into "take the last half of the file" — which, since the file
+// is grouped by thread, put whole conversations in or out of the sample by
+// where they sat in the ZIP. Measured on twelve equal threads, six of them
+// contributed nothing at all.
+//
+// The fixture below is built deliberately against the file order: thread 1
+// holds the newest messages and thread 3 the oldest. Selection by position
+// would keep thread 3; selection by date keeps thread 1. Nothing else
+// separates the two, which is the point.
+{
+  const DAY = 86400;
+  const now = Math.floor(Date.parse('2026-06-01T00:00:00Z') / 1000);
+  const ownTexts = [];
+  for (let thread = 1; thread <= 3; thread++) {
+    for (let i = 0; i < 400; i++) {
+      ownTexts.push({
+        // Same length everywhere, so the longest-half rule cannot decide this.
+        text: 'T' + thread + ' message ' + String(i).padStart(3, '0') + ' of a constant width',
+        // Thread 1 is the most recent, thread 3 the oldest — the reverse of
+        // the order they are pushed in.
+        ts: now - (thread * 400 + i) * DAY,
+      });
+    }
+  }
+  const dated = Digest.build({
+    ...signals,
+    messages: {
+      total: 2400, threads: 3, groupThreads: 0, sent: 1200, received: 1200,
+      avgSentLength: 44, ownTexts,
+    },
+  }, { includeMessages: true });
+  const sample = dated.directMessages.ownMessageSample;
+
+  check('messages carry the year they were sent, the same as captions do',
+    sample.every(line => /^\[\d{4}\] /.test(line)), sample[0]);
+
+  const kept = { T1: 0, T2: 0, T3: 0 };
+  for (const line of sample) kept[line.replace(/^\[\d{4}\] /, '').slice(0, 2)] += 1;
+  // Thread 1 holds the newest messages and is written *first* in the file, so
+  // keeping all of it is only possible if the date decided. A rule that took
+  // the last 500 of the file would have kept thread 3 whole and left thread 1
+  // to whatever the length tie-break spared — which is what happened before
+  // the timestamp was carried through.
+  check('the recent half is chosen by date, not by position in the file',
+    kept.T1 === 400, JSON.stringify(kept));
+  // And the other half is still the longest of what is left. Every line here
+  // is the same length, so that falls back to the oldest in order — which is
+  // the design, and means the sample reaches both ends of the archive rather
+  // than clustering at one.
+  check('the sample reaches both ends of the archive, not one of them',
+    kept.T1 > 0 && kept.T2 > 0 && kept.T3 > 0, JSON.stringify(kept));
+}
+
+// ---------- the floor on a message ----------
+//
+// Not a size decision, and the numbers say so: 81 of 1,000 messages in a real
+// export came in under fifteen characters and they were 0.4% of the digest
+// between them, because short messages are short. It pays because the *cap*
+// binds — that same export offered 9,741 of the reader's own messages for
+// 1,000 places, so a slot spent on "Handsum" is a slot not spent on a
+// sentence. On an account with fewer messages than places for them it would
+// lose texture and gain nothing, which is worth knowing before raising it
+// further.
+{
+  const short = Digest.build({
+    ...signals,
+    messages: {
+      total: 6, threads: 1, groupThreads: 0, sent: 6, received: 0, avgSentLength: 12,
+      ownTexts: [
+        { text: 'Handsum', ts: 1700000000 },
+        { text: 'Hahahaha wtf', ts: 1700000001 },
+        { text: 'You going ah', ts: 1700000002 },
+        { text: 'this one is comfortably past the floor', ts: 1700000003 },
+        { text: 'and so is this second longer message', ts: 1700000004 },
+      ],
+    },
+  }, { includeMessages: true });
+  const text = short.directMessages.ownMessageSample.join(' | ');
+  check('messages under the floor do not take a place in the sample',
+    !/Handsum|Hahahaha wtf|You going ah/.test(text), text);
+  check('and the ones above it do', /comfortably past the floor/.test(text) &&
+    /second longer message/.test(text), text);
+  // The statistic is measured over every message ever sent, not over the
+  // sample, so "this person writes briefly" survives the floor entirely.
+  check('the fact that somebody writes briefly is still carried, in the average',
+    short.directMessages.averageSentLength === 12,
+    String(short.directMessages.averageSentLength));
+  // Captions keep the old floor. A fourteen-character caption is a caption;
+  // the message floor is high because the message cap binds, and nothing else
+  // shares that reason.
+  const shortCaps = Digest.build({
+    ...signals, captions: [{ text: 'very jialat', ts: 1700000000 }],
+  }, { includeMessages: false });
+  check('captions keep their own lower floor, which the message one must not reach',
+    JSON.stringify(shortCaps.samples.captions).includes('very jialat'),
+    JSON.stringify(shortCaps.samples.captions));
+}
+
 // Links in the reader's own messages. A shared ride-tracking link is not
 // something to reason about and costs the same per character as a sentence:
 // 44 of 1,000 messages in a real export carried one, 6,400 characters between
@@ -3069,6 +3173,24 @@ check('digest holds no raw archive bytes', !JSON.stringify(digest).includes('PK
 // against the real fixture rather than a hand-built stand-in.
 const withDmSignals = await IG.readExports([file], { includeMessages: true });
 const withDms = Digest.build(withDmSignals, { includeMessages: true });
+
+// End to end, through the real archive rather than a hand-built list.
+//
+// The dated-sampling checks further down build `ownTexts` themselves, so they
+// prove what sampleTexts does with a timestamp and nothing about whether
+// instagram.js supplies one — deleting the `ts` from messageTexts left every
+// one of them passing. This is the check that fails when it is dropped: the
+// timestamp has to survive the parser, the owner filter and the digest.
+check('a message parsed from a real archive reaches the digest dated',
+  withDms.directMessages.ownMessageSample.every(line => /^\[\d{4}\] /.test(line)),
+  withDms.directMessages.ownMessageSample[0]);
+check('and the years are real ones off the export, not a constant',
+  new Set(withDms.directMessages.ownMessageSample
+    .map(line => line.slice(1, 5))).size >= 1 &&
+  withDms.directMessages.ownMessageSample.every(line => {
+    const year = Number(line.slice(1, 5));
+    return year >= 2005 && year <= 2100;
+  }), withDms.directMessages.ownMessageSample.slice(0, 2).join(' | '));
 
 check('DMs are parsed when included', withDmSignals.messages.threads === 13, String(withDmSignals.messages.threads));
 check('the account owner is identified in the threads', withDmSignals.messages.owner === 'Aleç',

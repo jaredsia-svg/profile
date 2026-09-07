@@ -384,7 +384,14 @@
         out.messageSenders.set(sender, (out.messageSenders.get(sender) || 0) + 1);
         bySender.set(sender, (bySender.get(sender) || 0) + 1);
         out.messageEvents.push({ sender, ts, len: content.length });
-        if (content) out.messageTexts.push({ sender, text: content });
+        // The timestamp goes with the text, not only into the event tally
+        // beside it. It was computed on the line above and dropped here, and
+        // the cost was larger than it looks: every message reached the digest
+        // undated, so the sampler's "take the most recent half" degenerated
+        // into "take the last half of the file", the model got no year prefix
+        // on a message where a caption gets one, and whole conversations were
+        // in or out of the sample by where they happened to sit in the ZIP.
+        if (content) out.messageTexts.push({ sender, text: content, ts });
       }
     },
   };
@@ -456,7 +463,8 @@
     }
     if (owner) {
       for (const m of signals.messageTexts) {
-        if (m.sender === owner) ownTexts.push(m.text);
+        // Dated, so digest.js can sample by time the way it does for captions.
+        if (m.sender === owner) ownTexts.push({ text: m.text, ts: m.ts });
       }
     }
     // How many conversations they actually took part in, as opposed to how
