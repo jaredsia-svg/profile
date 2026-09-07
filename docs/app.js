@@ -1591,6 +1591,47 @@
     (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
       ? 'auto' : 'smooth');
 
+  // ---------- holding a card still while the layout moves under it ----------
+  //
+  // The report scrolls in two different containers depending on where it is
+  // being read: the profile page scrolls the window, and the sample dialog
+  // scrolls its own body (`.sample-dialog-body` is `overflow-y: auto`). Any
+  // correction that assumed the window would silently do nothing inside the
+  // dialog, which is the kind of half-working that never gets reported.
+  function scrollHostOf(node) {
+    for (let el = node.parentElement; el; el = el.parentElement) {
+      const overflowY = getComputedStyle(el).overflowY;
+      if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight) {
+        return el;
+      }
+    }
+    return null;
+  }
+
+  /** How far down the visible area an element currently sits, in pixels. */
+  function viewportTopOf(node, host) {
+    const top = node.getBoundingClientRect().top;
+    return host ? top - host.getBoundingClientRect().top : top;
+  }
+
+  function scrollHostBy(host, delta) {
+    if (!delta) return;
+    if (host) host.scrollTop += delta;
+    else window.scrollBy(0, delta);
+  }
+
+  function visibleHeightOf(host) {
+    return host ? host.clientHeight : window.innerHeight;
+  }
+
+  // Below this much of the visible height, a heading that stayed exactly where
+  // it was would have opened its section almost entirely off-screen — so that
+  // one case gets a scroll and every other click gets none. Deliberately low:
+  // the point of anchoring is that most clicks move nothing at all, and a
+  // threshold generous enough to fire on a mid-screen heading would put the
+  // page back to sliding on nearly every toggle.
+  const REVEAL_BELOW = 0.62;
+
   // Every place that lands back on the welcome page with something to say —
   // a bad archive, a bad photo, a failed analysis, a stale share link — used
   // to call show('welcome') and flash the message in the same breath. show()
@@ -1843,6 +1884,17 @@
     const card = head.closest('.section-card');
     if (!card) return;
     const opening = card.classList.contains('is-collapsed');
+    // The heading, not the card around it, and measured before anything is
+    // toggled — both halves matter and both were wrong first time.
+    //
+    // The position worth preserving is the one the reader's finger was on,
+    // which is the heading. The card is not a stand-in for it: a shut card
+    // carries reduced padding, so opening one pushes its own heading a few
+    // pixels further down inside it. Anchor the card and the heading creeps
+    // downward on every single toggle, by an amount too small to name and
+    // large enough to feel over a session of opening sections.
+    const host = opening ? scrollHostOf(card) : null;
+    const touchedAt = opening ? viewportTopOf(head, host) : 0;
     setSectionOpen(card, opening);
     // Accordion, not a pile of open sections: opening one shuts every other
     // one already open in the same report, so the page stays as compact as
@@ -1857,28 +1909,60 @@
         const other = head2.closest('.section-card');
         if (other && other !== card) setSectionOpen(other, false);
       }
-      // Land the section the reader just opened at the top of the screen.
+
+      // Put it back exactly where it was.
       //
-      // Without this the accordion moves the page under them: shutting a
-      // section that sat *above* the one they clicked removes its whole height
-      // from the flow, so the card they are opening jumps upward by however
-      // much that section happened to be — sometimes past the top of the
-      // viewport entirely, leaving them looking at the middle of a section
-      // whose heading is now off-screen. The shift is invisible in the markup
-      // and depends on which section was open before, which is why it reads as
-      // the page misbehaving rather than as a layout consequence.
+      // Shutting a section that sat *above* the clicked one removes its whole
+      // height from the flow, and everything below leaps up by however tall
+      // that section happened to be — often most of a screen. This used to be
+      // answered by scrolling the opened card to the top of the viewport
+      // afterwards, which fixed where the reader ended up and not what they
+      // saw on the way: an instant, uncontrolled jump followed by an animated
+      // glide, from a position the jump had already invalidated. Two movements
+      // where the reader asked for none, and on a heading clicked below the
+      // previously-open section the glide ran *backwards*, so the page
+      // appeared to overshoot and bounce.
       //
-      // Deliberately after the accordion loop: those `display: none` switches
-      // are synchronous, so the position measured here is the settled one
-      // rather than the pre-collapse one. Scrolling first would aim at
-      // coordinates the collapse is about to invalidate.
+      // Correcting the scroll by exactly the distance the layout moved cancels
+      // the jump instead of chasing it. The heading stays under the reader's
+      // finger, the section above vanishes, the sections below slide up around
+      // it, and the thing they are looking at does not move at all. Instantly
+      // and unconditionally, because this is not an animation — it is the
+      // absence of one.
+      //
+      // Measured after the loop rather than in a frame callback: those
+      // `display: none` switches are synchronous and getBoundingClientRect
+      // forces layout, so this reads the settled position rather than the
+      // pre-collapse one.
+      // Corrected, then checked and corrected again.
+      //
+      // One pass leaves a few pixels behind: scrolling and laying out settle
+      // against each other, so the position measured immediately after the
+      // collapse is not quite the position the browser ends up at once the
+      // scroll has been applied. Two passes converge; a third has nothing left
+      // to do. Cheap, and the alternative is a heading that creeps by a few
+      // pixels on every toggle, which over a session of opening sections is
+      // exactly the drift this is here to remove.
+      for (let pass = 0; pass < 2; pass++) {
+        const drift = viewportTopOf(head, host) - touchedAt;
+        if (Math.abs(drift) < 1) break;
+        scrollHostBy(host, drift);
+      }
+
+      // The one case anchoring alone handles badly: a heading near the bottom
+      // of the screen, whose section now opens almost entirely below the fold.
+      // Here a scroll is what the reader wants rather than something happening
+      // to them — and it starts from a settled position instead of mid-leap,
+      // so it reads as one deliberate movement.
       //
       // The offset that keeps the heading clear of the sticky nav lives in CSS
       // as .section-card's `scroll-margin-top`, so the two cannot drift the way
       // a hardcoded pixel figure here would the next time the nav changes
       // height. Inside the sample dialog that margin is smaller, because the
       // dialog's own head does not overlap its scrolling body.
-      card.scrollIntoView({ behavior: scrollBehaviour(), block: 'start' });
+      if (viewportTopOf(card, host) > visibleHeightOf(host) * REVEAL_BELOW) {
+        card.scrollIntoView({ behavior: scrollBehaviour(), block: 'start' });
+      }
     }
   });
 
