@@ -1094,7 +1094,14 @@
   function roastBlock(bonus) {
     if (!bonus) return '';
     return '<div class="card section-card bonus-card">' +
-      sectionHead('🕳️', esc(TEXT.bonus), esc(TEXT.bonusSub), true) +
+      // Same splice paidCard uses for its "Premium" badge: sectionHead
+      // concatenates whatever it is handed into the <h2>, so a title with
+      // markup in it is the one thing it is handed that is not plain text.
+      // A different class, because this badge is saying the opposite thing —
+      // see .bonus-badge in styles.css.
+      sectionHead('🕳️', esc(TEXT.bonus) +
+        ' <span class="mode-badge bonus-badge">' + esc(TEXT.bonusBadge) + '</span>',
+      esc(TEXT.bonusSub), true) +
       '<div class="bonus-cover">' +
       '<h3>' + esc(TEXT.bonusCoverTitle) + '</h3>' +
       '<p>' + esc(TEXT.bonusCoverBlurb) + '</p>' +

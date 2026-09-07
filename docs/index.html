@@ -965,7 +965,11 @@
     <button class="mode-option" data-datasource="instagram" type="button">
       <span class="mode-icon">📷</span>
       <span class="mode-body"><strong>Instagram <span class="mode-tag">(required)</span></strong>
-        <span class="muted">Load a new Instagram export .zip file here to replace it</span>
+        <!-- The parts clause matters as much here as on a first upload: a
+             re-run replaces Instagram wholesale, so a reader who picks only
+             part 1 of a split export replaces a complete archive with half of
+             one. See dataSourcesFirstInstagram in copy.js. -->
+        <span class="muted">Load a new Instagram export .zip file here to replace it — if it arrived as several parts, select them all at once</span>
         <span class="mode-progress" hidden>
           <span class="progress slim"><span class="progress-bar"></span></span>
           <span class="mode-progress-label muted"></span>

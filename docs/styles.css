@@ -1565,6 +1565,17 @@ ul.sends li::before { content: "\2192"; position: absolute; left: 0; color: var(
   color: var(--accent); background: var(--accent-soft); white-space: nowrap;
   border: 1px solid var(--line); border-radius: 999px; padding: .1rem .45rem;
 }
+/* The roast's badge, built on .mode-badge so the two are the same object at
+   the same size — a "Bonus" that sat differently from "Premium" would read as
+   a different kind of thing rather than the other value of the same one.
+   Only the colour changes, to the "good" accent: these two badges make
+   opposite promises, and a reader scanning the page should be able to tell
+   which is which without reading either. */
+.bonus-badge {
+  color: var(--good);
+  background: var(--good-soft);
+}
+
 .mode-price { display: block; margin-top: .35rem; font-size: .85rem; font-weight: 600; }
 
 /* The supplement dialog's one live region: progress while a second archive is

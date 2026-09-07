@@ -4941,6 +4941,38 @@ try {
     /honest verdict on what kind of partner/i.test(unlocked.text) &&
     unlocked.coverHidden && unlocked.expanded === 'true',
     unlocked.text.slice(0, 200));
+  // The roast's own badge, beside the four paid ones. It marks the section the
+  // same way "Premium" does and says the opposite thing, so both halves are
+  // checked: that it is there and reads "Bonus", and that it is not styled as
+  // a paid badge — a "Bonus" in the accent colour of the four things a reader
+  // has to buy is worse than no badge, because it says "pay" about the one
+  // section that is free.
+  const roastBadge = await page.evaluate(() => {
+    const node = document.querySelector('.bonus-card .card-head .mode-badge');
+    if (!node) return null;
+    const paid = document.querySelector('.paid-card .card-head .mode-badge');
+    return {
+      text: node.textContent.trim(),
+      expected: window.PsycheCopy.TEXT.bonusBadge,
+      isBonus: node.classList.contains('bonus-badge'),
+      colour: getComputedStyle(node).color,
+      paidColour: paid ? getComputedStyle(paid).color : null,
+      // Same object, same size: a badge that sat differently would read as a
+      // different kind of thing rather than the other value of the same one.
+      size: getComputedStyle(node).fontSize,
+      paidSize: paid ? getComputedStyle(paid).fontSize : null,
+    };
+  });
+  check('the roast section carries a badge of its own',
+    Boolean(roastBadge) && roastBadge.text === roastBadge.expected && roastBadge.text === 'Bonus',
+    JSON.stringify(roastBadge));
+  check('and it is sized like the Premium badge, so the two read as one kind of thing',
+    Boolean(roastBadge) && roastBadge.size === roastBadge.paidSize,
+    JSON.stringify(roastBadge && { size: roastBadge.size, paid: roastBadge.paidSize }));
+  check('but coloured differently, because it promises the opposite of one',
+    Boolean(roastBadge) && roastBadge.isBonus && roastBadge.colour !== roastBadge.paidColour,
+    JSON.stringify(roastBadge && { colour: roastBadge.colour, paid: roastBadge.paidColour }));
+
   // The strengths line under the attachment style name, on screen rather than
   // only in the schema. It carries the whole tone of that section: the four
   // style names arrive loaded, and somebody just told they lean anxious or

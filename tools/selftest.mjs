@@ -1429,6 +1429,37 @@ check('a language can be marked minor rather than invented',
 // became its own section on the page, and the schema followed so the two do
 // not drift apart.
 const attachProps = prompts.PREMIUM_SCHEMA.properties.attachment.properties;
+// Split exports, said before they go wrong rather than only after.
+//
+// Instagram hands over several numbered .zip files when an export is large,
+// which is exactly the accounts this app most wants. Selecting them together
+// works and always has — readExports merges every archive it is given — but
+// selecting them one after another does not, because the second read replaces
+// the first, and it does so silently: the tick looks identical either way, and
+// a half-loaded export usually still clears the recognition check and produces
+// a confident report from half the evidence.
+//
+// Both rows are checked, because a re-run replaces Instagram wholesale, so
+// picking only part 1 there swaps a complete archive for half of one — the
+// same mistake with more to lose.
+{
+  const markup = readFileSync(join(root, 'docs', 'index.html'), 'utf8');
+  const rowLine = (/data-datasource="instagram"[\s\S]{0,900}?<span class="muted">([^<]+)</
+    .exec(markup) || [])[1] || '';
+  check('the first-upload Instagram row says to select every part at once',
+    /several parts/i.test(globalThis.PsycheCopy.TEXT.dataSourcesFirstInstagram) &&
+    /all at once/i.test(globalThis.PsycheCopy.TEXT.dataSourcesFirstInstagram),
+    globalThis.PsycheCopy.TEXT.dataSourcesFirstInstagram);
+  check('and the report page\'s replace row says it too',
+    /several parts/i.test(rowLine) && /all at once/i.test(rowLine), rowLine.trim());
+  // The recognition failure still names the same remedy. It is the only place
+  // a reader who got it wrong will be told, so the two must not drift into
+  // saying different things about the same archive.
+  const source = readFileSync(join(root, 'docs', 'instagram.js'), 'utf8');
+  check('and the failure a half-loaded export hits names the same remedy',
+    /several \.zip parts, choose all of them together/i.test(source));
+}
+
 check('attachment shows its working',
   ['style', 'styleTone', 'why', 'derivedFrom', 'implications', 'caveat'].every(k => k in attachProps));
 // The strengths line has to be rendered as well as generated. A schema field

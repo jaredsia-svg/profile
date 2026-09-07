@@ -387,6 +387,13 @@
     // by all four paid sections: see `PAID_SECTIONS` in docs/app.js, which
     // applies it uniformly.
     premiumBadge: 'Premium',
+    // The roast's counterpart to that badge. It marks the section the same way
+    // — a word in the heading saying what kind of thing this is — but says
+    // "included" rather than "paid for", which is the distinction a reader
+    // scanning the page is actually making. Without it the roast is the one
+    // section on the page whose heading carries no marker at all, and it sits
+    // among four that do.
+    bonusBadge: 'Bonus',
 
     // The premium tier block, shown twice on the way in — the insight diagram
     // and "What you can expect?" — and built once in docs/app.js from
@@ -651,7 +658,18 @@
     // The Instagram row's own line on that same popout. The markup's version
     // ends "to replace it", which is right on the report page and describes
     // replacing something that does not exist yet here.
-    dataSourcesFirstInstagram: 'Load your Instagram export .zip file here',
+    //
+    // The parts sentence is here because Instagram splits a large export into
+    // numbered .zip files and hands over several at once — on exactly the
+    // accounts this app most wants, since the split happens when there is a
+    // lot of history. Selecting them together works and always has: readExports
+    // merges every archive it is given. Selecting them one after another does
+    // not, because the second read replaces the first, and it does so silently
+    // — the tick looks identical either way, and a half-loaded export usually
+    // still clears the recognition check and produces a confident report from
+    // half the evidence. Saying it here is the cheap half of the fix.
+    dataSourcesFirstInstagram: 'Load your Instagram export .zip file here — ' +
+      'if it arrived as several parts, select them all at once',
     // Only shown once a fresh Instagram export is actually picked — see the
     // reasoning at the call site in app.js for why this cannot always be
     // carried forward automatically.
