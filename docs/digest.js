@@ -18,10 +18,23 @@
   const LIMITS = {
     captions: 560,
     comments: 360,
-    messages: 1000,
-    // The floor a message must clear to take one of those 1,000 places — see
-    // sampleTexts for why this is a quality number and not a size one.
+    // Messages, and the three buckets they are drawn in — see sampleMessages
+    // for what each one is for and why the old single rule could not see the
+    // middle of somebody's writing at all. The three add up to `messages`.
+    messages: 300,
+    messagesRecent: 150,
+    messagesLongest: 75,
+    messagesMiddle: 75,
+    // The floor a message must clear to take one of those 300 places — see
+    // sampleMessages for why this is a quality number and not a size one.
     messageChars: 15,
+    // And the ceiling on one message. Raised from 240, where it was cutting
+    // off the messages most worth having: 40 of 1,000 in a real export sat at
+    // that cap, and they are the apologies, the explanations and the plans —
+    // the ones where somebody is actually saying something rather than
+    // arranging a time. Cheap, because only 4% of messages reach it: p90 was
+    // 167 characters and p95 was 213.
+    messageMaxChars: 2000,
     likedAuthors: 240,
     savedAuthors: 120,
     searches: 160,
@@ -365,6 +378,112 @@
     return cleaned.filter(c => chosen.has(c.display)).map(c => c.display);
   }
 
+  // ---------- messages, sampled in three deliberate parts ----------
+  //
+  // Captions go through `sampleTexts`, which takes the most recent half and
+  // then the longest of the rest. That shape is bimodal by construction: the
+  // newest and the wordiest, and nothing in between. For captions it is a
+  // reasonable trade. For messages it throws away the thing that matters most.
+  //
+  // How somebody writes to people close to them is mostly visible in ordinary
+  // messages — the register, the warmth, how much they explain themselves, how
+  // they open and close a conversation. Those are neither the newest nor the
+  // longest, so the old sampler could not see them at all. It saw the last
+  // fortnight and the essays.
+  //
+  // Three buckets instead:
+  //
+  //   · **150 recent** — spread across the last eighteen months rather than
+  //     taken off the end, so the window is represented instead of the last
+  //     fortnight standing in for it.
+  //   · **75 longest** — where somebody actually says something. An apology,
+  //     an explanation, a plan. These are also the ones the old 240-character
+  //     cap destroyed, cutting them off mid-sentence.
+  //   · **75 mid-length, at random** — the middle of the length distribution,
+  //     which nothing else here would ever reach.
+  //
+  // Fewer messages than before, and deliberately: 300 against the old 1,000.
+  // The trade is breadth for depth, and it is worth naming, because a real
+  // archive had 375 active threads and 300 messages is under one per
+  // relationship. The breadth is carried by the counts beside this —
+  // activeThreads, mostEngagedWith, sent against received — and the sample's
+  // job is voice, not census.
+  // Seconds, because that is the unit every `ts` in this file carries —
+  // instagram.js divides timestamp_ms by 1000 on the way in. Written in
+  // milliseconds first, which made the window larger than any archive and so
+  // silently selected everything: the recent bucket spread itself evenly
+  // across a decade instead of across eighteen months, and looked like it was
+  // working because it still returned 150 messages.
+  const MESSAGE_WINDOW_SECONDS = 18 * 30 * 24 * 60 * 60;
+
+  // Deterministic, and that is not a detail. The server keys its result cache
+  // on the digest, so a sample drawn with Math.random would produce a
+  // different digest on every rebuild — a different key, a missed cache, and
+  // the reader paying again for the retry that was supposed to be free. This
+  // hashes the text itself, so the same archive always yields the same draw.
+  function stableHash(text) {
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
+  function sampleMessages(texts, opts) {
+    const maxChars = opts.maxChars;
+    const floor = opts.minChars;
+    const cleaned = [];
+    const seen = new Set();
+    for (const item of texts) {
+      const dated = Boolean(item) && typeof item === 'object';
+      const value = trim(dated ? item.text : item, maxChars);
+      if (value.length < floor || seen.has(value)) continue;
+      seen.add(value);
+      const ts = dated && Number.isFinite(item.ts) && item.ts > 0 ? item.ts : 0;
+      const year = dated ? yearOf(item.ts) : '';
+      cleaned.push({ ts, len: value.length, display: year ? '[' + year + '] ' + value : value });
+    }
+    cleaned.sort((a, b) => a.ts - b.ts);
+    if (cleaned.length <= opts.limit) return cleaned.map(c => c.display);
+
+    const chosen = new Set();
+    const take = list => { for (const c of list) if (chosen.size < opts.limit) chosen.add(c); };
+
+    // Recent. Anchored to their newest message rather than to the clock, so an
+    // account that went quiet two years ago still fills this bucket with the
+    // last eighteen months *it was used* instead of leaving it empty and
+    // falling back. One rule rather than a rule and an exception.
+    const newest = cleaned[cleaned.length - 1].ts;
+    const since = newest - MESSAGE_WINDOW_SECONDS;
+    take(sampleEvenly(cleaned.filter(c => c.ts >= since), opts.recent));
+
+    // Longest of whatever is left.
+    const rest = () => cleaned.filter(c => !chosen.has(c));
+    take(rest().sort((a, b) => b.len - a.len).slice(0, opts.longest));
+
+    // The middle of the length distribution, drawn at random within it. The
+    // interquartile range is measured over everything rather than over what is
+    // left, so "mid-length" means mid-length for this person and not merely
+    // mid-length among the leftovers.
+    const lengths = cleaned.map(c => c.len).sort((a, b) => a - b);
+    const low = lengths[Math.floor(lengths.length * 0.25)];
+    const high = lengths[Math.floor(lengths.length * 0.75)];
+    const middle = rest().filter(c => c.len >= low && c.len <= high);
+    take(middle.slice().sort((a, b) => stableHash(a.display) - stableHash(b.display))
+      .slice(0, opts.middle));
+
+    // Any shortfall — a bucket that had less in it than it asked for — filled
+    // from the most recent of what is left, which is the half a reader would
+    // miss first.
+    if (chosen.size < opts.limit) take(rest().reverse());
+
+    // One chronological run, the same reason sampleTexts restores order: the
+    // buckets are picked by three different rules and a reader asked to see a
+    // trajectory should not be handed them interleaved.
+    return cleaned.filter(c => chosen.has(c)).map(c => c.display);
+  }
+
   // The year a caption was written, as a string, or '' when the record carried
   // no usable timestamp. Guarded against the epoch-zero and far-future values
   // that turn up in real exports rather than trusting whatever Date returns.
@@ -621,13 +740,20 @@
         // per character as a sentence does: 44 of 1,000 messages in a real
         // export carried one, at 6,400 characters between them. What surrounds
         // a link is the evidence, so the message is kept and the URL is not.
-        ownMessageSample: sampleTexts(
+        ownMessageSample: sampleMessages(
           // Tolerant of both shapes: instagram.js now sends `{text, ts}`, and
           // a bare string is still what a hand-built fixture passes.
           messages.ownTexts.map(m => (m && typeof m === 'object'
             ? { ...m, text: stripLinks(m.text) }
             : stripLinks(m))),
-          LIMITS.messages, 240, LIMITS.messageChars),
+          {
+            limit: LIMITS.messages,
+            recent: LIMITS.messagesRecent,
+            longest: LIMITS.messagesLongest,
+            middle: LIMITS.messagesMiddle,
+            maxChars: LIMITS.messageMaxChars,
+            minChars: LIMITS.messageChars,
+          }),
       };
       digest.coverage.sampling.ownMessages = {
         shown: digest.directMessages.ownMessageSample.length,

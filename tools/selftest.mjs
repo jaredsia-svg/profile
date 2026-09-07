@@ -3075,33 +3075,37 @@ check('but the count it was read for still is',
     JSON.stringify(withGoogle.google).slice(0, 200));
 }
 
-// ---------- messages are dated, and sampled by date ----------
+// ---------- messages are dated, and sampled in three buckets ----------
 //
 // instagram.js computed a timestamp for every message and put it only into the
-// event tally, so the text arrived at the sampler with ts = 0. Three things
-// followed: no year prefix on a message where a caption gets one, a
-// chronological sort that was a no-op, and "take the most recent half"
-// degenerating into "take the last half of the file" — which, since the file
-// is grouped by thread, put whole conversations in or out of the sample by
-// where they sat in the ZIP. Measured on twelve equal threads, six of them
-// contributed nothing at all.
+// event tally, so the text arrived at the sampler undated and every rule that
+// depended on a date silently did something else. The dating itself is checked
+// end to end further up, against the real parsed archive; this block is about
+// what the three buckets do with it.
 //
-// The fixture below is built deliberately against the file order: thread 1
-// holds the newest messages and thread 3 the oldest. Selection by position
-// would keep thread 3; selection by date keeps thread 1. Nothing else
-// separates the two, which is the point.
+// The contract, and the reason for each part:
+//
+//   · 150 spread across the last eighteen months, so recent writing is
+//     represented by the window rather than by the last fortnight.
+//   · 75 longest, which is where somebody actually says something.
+//   · 75 mid-length at random, which is the register nothing else here reaches
+//     — the old single rule was bimodal by construction and could not see the
+//     middle of a person's writing at all.
 {
   const DAY = 86400;
+  const MONTH18 = 18 * 30 * DAY;
   const now = Math.floor(Date.parse('2026-06-01T00:00:00Z') / 1000);
   const ownTexts = [];
-  for (let thread = 1; thread <= 3; thread++) {
+  // Three eras, each 400 messages: inside the window, just outside it, and
+  // long ago. Lengths vary independently of era, so "longest" cannot stand in
+  // for "oldest" and each bucket has to earn its own picks.
+  const eras = [0, 600, 1400];
+  for (let era = 0; era < eras.length; era++) {
     for (let i = 0; i < 400; i++) {
+      const width = 20 + ((i * 37) % 400);
       ownTexts.push({
-        // Same length everywhere, so the longest-half rule cannot decide this.
-        text: 'T' + thread + ' message ' + String(i).padStart(3, '0') + ' of a constant width',
-        // Thread 1 is the most recent, thread 3 the oldest — the reverse of
-        // the order they are pushed in.
-        ts: now - (thread * 400 + i) * DAY,
+        text: 'E' + era + ' message ' + String(i).padStart(3, '0') + ' ' + 'x'.repeat(width),
+        ts: now - (eras[era] + i) * DAY,
       });
     }
   }
@@ -3114,24 +3118,84 @@ check('but the count it was read for still is',
   }, { includeMessages: true });
   const sample = dated.directMessages.ownMessageSample;
 
-  check('messages carry the year they were sent, the same as captions do',
+  check('the sample is capped at the limit, not at whichever bucket filled',
+    sample.length === Digest.LIMITS.messages, String(sample.length));
+  check('every message still carries the year it was sent',
     sample.every(line => /^\[\d{4}\] /.test(line)), sample[0]);
 
-  const kept = { T1: 0, T2: 0, T3: 0 };
-  for (const line of sample) kept[line.replace(/^\[\d{4}\] /, '').slice(0, 2)] += 1;
-  // Thread 1 holds the newest messages and is written *first* in the file, so
-  // keeping all of it is only possible if the date decided. A rule that took
-  // the last 500 of the file would have kept thread 3 whole and left thread 1
-  // to whatever the length tie-break spared — which is what happened before
-  // the timestamp was carried through.
-  check('the recent half is chosen by date, not by position in the file',
-    kept.T1 === 400, JSON.stringify(kept));
-  // And the other half is still the longest of what is left. Every line here
-  // is the same length, so that falls back to the oldest in order — which is
-  // the design, and means the sample reaches both ends of the archive rather
-  // than clustering at one.
-  check('the sample reaches both ends of the archive, not one of them',
-    kept.T1 > 0 && kept.T2 > 0 && kept.T3 > 0, JSON.stringify(kept));
+  const era = line => line.replace(/^\[\d{4}\] /, '').slice(0, 2);
+  const kept = { E0: 0, E1: 0, E2: 0 };
+  for (const line of sample) kept[era(line)] += 1;
+  // The recent bucket is 150 of 300 and only era 0 lies inside the window, so
+  // it has to be at least that well represented. Position cannot produce this:
+  // era 0 is written first in the list, so a rule reading the tail of the
+  // input would favour era 2.
+  check('the recent bucket fills from inside the eighteen-month window',
+    kept.E0 >= Digest.LIMITS.messagesRecent, JSON.stringify(kept));
+  // And the other two buckets reach past it, or the sample would be recency
+  // with extra steps.
+  check('and the other buckets reach back beyond that window',
+    kept.E1 > 0 && kept.E2 > 0, JSON.stringify(kept));
+
+  // The longest bucket. The top 75 lengths in the fixture are unambiguous, so
+  // if they are not all here the bucket is not doing its job.
+  const bodies = sample.map(line => line.replace(/^\[\d{4}\] /, ''));
+  const allLengths = ownTexts.map(m => m.text.length).sort((a, b) => b - a);
+  const cutoff = allLengths[Digest.LIMITS.messagesLongest - 1];
+  const longKept = bodies.filter(b => b.length >= cutoff).length;
+  check('the longest messages are all kept, which is where somebody says something',
+    longKept >= Digest.LIMITS.messagesLongest, longKept + ' of ' + Digest.LIMITS.messagesLongest);
+
+  // The middle, on a fixture built so that nothing else can reach it.
+  //
+  // Checked separately because on an ordinary archive the recent and longest
+  // buckets pick up mid-length messages incidentally — deleting the middle
+  // bucket from the sampler left the count above unchanged, which is a check
+  // that passes because the fixture is kind rather than because the code
+  // works. Here the recent era is deliberately bimodal, all very short or very
+  // long, and every mid-length message sits outside the window and below the
+  // longest cut. Only the middle bucket can produce one.
+  {
+    const bimodal = [];
+    for (let i = 0; i < 400; i++) {
+      bimodal.push({
+        text: 'R' + i + ' ' + 'x'.repeat(i % 2 ? 12 : 900),
+        ts: now - i * DAY,
+      });
+    }
+    for (let i = 0; i < 800; i++) {
+      bimodal.push({
+        text: 'M' + i + ' ' + 'x'.repeat(300 + (i % 20)),
+        ts: now - (700 + i) * DAY,
+      });
+    }
+    const split = Digest.build({
+      ...signals,
+      messages: {
+        total: 1200, threads: 3, groupThreads: 0, sent: 1200, received: 0,
+        avgSentLength: 300, ownTexts: bimodal,
+      },
+    }, { includeMessages: true });
+    const mids = split.directMessages.ownMessageSample
+      .filter(line => /^\[\d{4}\] M\d+ /.test(line)).length;
+    check('the middle of the length distribution is reached by its own bucket',
+      mids >= Digest.LIMITS.messagesMiddle,
+      mids + ' mid-length of ' + Digest.LIMITS.messagesMiddle + ' asked for');
+  }
+
+  // Deterministic, which is not a nicety: the server keys its result cache on
+  // the digest, so a draw that moved between rebuilds would change the key,
+  // miss the cache, and charge the reader for the retry that was meant to be
+  // free. Built twice from the same input and compared.
+  const again = Digest.build({
+    ...signals,
+    messages: {
+      total: 2400, threads: 3, groupThreads: 0, sent: 1200, received: 1200,
+      avgSentLength: 44, ownTexts,
+    },
+  }, { includeMessages: true });
+  check('the random bucket is drawn deterministically, so a retry keys the same',
+    JSON.stringify(again.directMessages.ownMessageSample) === JSON.stringify(sample));
 }
 
 // ---------- the floor on a message ----------
@@ -3549,9 +3613,14 @@ const heavyMessagesSignals = {
   },
 };
 const heavyMessages = Digest.build(heavyMessagesSignals, { includeMessages: true });
-check('the DM cap is 1000, not the old 280', Digest.LIMITS.messages === 1000);
-check('a heavy account caps DMs at the new limit',
-  heavyMessages.directMessages.ownMessageSample.length === 1000,
+check('the DM cap is 300, drawn in three buckets that add up to it',
+  Digest.LIMITS.messages === 300 &&
+  Digest.LIMITS.messagesRecent + Digest.LIMITS.messagesLongest +
+    Digest.LIMITS.messagesMiddle === Digest.LIMITS.messages,
+  JSON.stringify([Digest.LIMITS.messagesRecent, Digest.LIMITS.messagesLongest,
+    Digest.LIMITS.messagesMiddle]));
+check('a heavy account caps DMs at that limit',
+  heavyMessages.directMessages.ownMessageSample.length === 300,
   heavyMessages.directMessages.ownMessageSample.length + ' messages');
 
 // ---------- the 4-character floor ----------
