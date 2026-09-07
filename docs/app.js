@@ -931,6 +931,25 @@
    * digest, which is already stored under its own key and is far too big to
    * want a second copy of in a quota this app has already run up against.
    */
+  /**
+   * The reader's real Instagram handle, while the archive that carries it is
+   * still in memory.
+   *
+   * Read from `state.signals` rather than from the stored digest, because the
+   * digest no longer has it — Digest.build replaces it with a placeholder
+   * before anything is sent. This is only ever used to scrub it out of a
+   * supplement being merged in; it never travels anywhere itself.
+   */
+  function ownHandle() {
+    return (state.signals && state.signals.profile && state.signals.profile.username) || '';
+  }
+
+  /** What to call the reader on their own card, from the archive rather than the digest. */
+  function ownDisplayName() {
+    const profile = (state.signals && state.signals.profile) || {};
+    return String(profile.name || profile.username || '').trim();
+  }
+
   function rememberJob(key, kind, auth, context) {
     store.write(KEYS.job, {
       key,
@@ -1793,7 +1812,11 @@
         const extra = {};
         if (typeof collected.google === 'object') extra.google = collected.google;
         if (typeof collected.facebook === 'object') extra.facebook = collected.facebook;
-        if (Object.keys(extra).length) digest = Digest.addSupplements(digest, extra);
+        // The handle so the supplement's own text can be scrubbed too — see
+        // redactOwnHandle. Undefined when the archive is gone, which is the
+        // gap that function documents rather than one worth reopening the
+        // Instagram picker for.
+        if (Object.keys(extra).length) digest = Digest.addSupplements(digest, extra, { ownHandle: ownHandle(), ownName: ownDisplayName() });
       } else {
         // Google or Facebook loaded with no Instagram behind them. The popout
         // is reopened rather than the run abandoned, because the reader is one
@@ -2415,7 +2438,6 @@
     const commentsCount = digest.samples.comments.length;
     const engagedCount = digest.mostLikedAccounts.length + digest.mostSavedAccounts.length +
       digest.mostEngagedWith.length;
-    const followingCount = digest.following.length;
     const topicsCount = digest.instagramTopics.length + digest.instagramAdInterests.length;
     const searchesCount = digest.samples.searches.length;
 
@@ -2432,10 +2454,15 @@
       ['review-activity', 'includeActivity', 1,
         'Activity & timing', 'Activity & timing',
         'Post counts, likes, saves and when you tend to be active. Numbers only, no text.'],
-      ['review-accounts', 'includeAccounts', followingCount + engagedCount,
-        'Accounts you follow and engage with', 'Accounts you follow and engage with — none found',
-        followingCount + ' followed accounts, plus ' + engagedCount +
-        ' names among who you like, save and comment on most.'],
+      // The raw follow list is no longer sent — hundreds of opaque handles
+      // that said almost nothing — so this row no longer offers it. How many
+      // accounts they follow is still sent, as a number, under Activity &
+      // timing where the other counts live. Naming follows here would be
+      // promising to send something the digest does not contain, which is the
+      // one thing a review screen must never do.
+      ['review-accounts', 'includeAccounts', engagedCount,
+        'Accounts you engage with', 'Accounts you engage with — none found',
+        engagedCount + ' names among who you like, save and comment on most.'],
       ['review-topics', 'includeTopics', topicsCount,
         'Instagram’s own inferred topics', 'Instagram’s own inferred topics — none found',
         digest.instagramTopics.length + ' topics and ' + digest.instagramAdInterests.length +
@@ -3141,7 +3168,7 @@
       digest = Digest.build(signals, { includeMessages: true });
     } else if (state.digest) {
       digest = JSON.parse(JSON.stringify(state.digest));
-      if (extraSupplements) digest = Digest.addSupplements(digest, extraSupplements);
+      if (extraSupplements) digest = Digest.addSupplements(digest, extraSupplements, { ownHandle: ownHandle(), ownName: ownDisplayName() });
     } else {
       // No archive in memory and no stored digest to merge into — there is
       // nothing to send. Reached when the digest went missing on its own
@@ -3277,6 +3304,24 @@
     // before anything else can fail below and leave them standing.
     clearPending();
     clearJob();
+    // The name on the shareable card, put back where the redaction took it.
+    //
+    // Most accounts have a display name, which is what `profile.name` carries
+    // and what the model names the card after. An account without one falls
+    // back to its handle — and the handle is now a placeholder, so the model
+    // has nothing to work from and calls them "user". Stitching the real one
+    // in here is the fix, and it is a better arrangement than sending it: the
+    // name reaches the QR code the reader chooses to share, and never reaches
+    // the model at all.
+    //
+    // Only when the model actually returned the placeholder, so a real name it
+    // was given is never overwritten; and only while the archive is in memory,
+    // which is true on the run that generated the card and not on a resumed
+    // one — where the card is already whatever the first attempt made it.
+    const realName = ownDisplayName();
+    if (realName && /^PsycheUser$/i.test(String(result.data.card.name || '').trim())) {
+      result.data.card.name = realName;
+    }
     const payload = await Card.encodeCard(result.data.card);
     state.profile = {
       report: result.data,
@@ -4535,7 +4580,7 @@
     // memory — see Digest.addSupplements.
     let enriched;
     try {
-      enriched = Digest.addSupplements(JSON.parse(JSON.stringify(current)), supplements);
+      enriched = Digest.addSupplements(JSON.parse(JSON.stringify(current)), supplements, { ownHandle: ownHandle(), ownName: ownDisplayName() });
     } catch (error) {
       return current;
     }

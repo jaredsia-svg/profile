@@ -2224,7 +2224,10 @@ for (const [label, needle] of [
   // The consumption read is the one section that names third-party accounts
   // and the one that gives advice, so both of its ways of going wrong are
   // pinned rather than trusted to the schema alone.
-  ['reads the four appetites as separate things', /what they subscribed to.*what actually catches them/],
+  // Three lists now, read against the follow *count* — the list of handles is
+  // no longer sent, and the comparison never needed the names.
+  ['reads the appetites as separate things', /what actually catches them.*what they meant to come back to/],
+  ['reads them against how many accounts were subscribed to', /counts\.following/],
   ['looks for the gap rather than the totals', /Read the \*\*gaps\*\*/],
   ['refuses to invent time it cannot measure', /No source here carries timing data of any kind/],
   ['will not name a private individual', /a friend or a relative is described rather than named/],
@@ -2471,6 +2474,31 @@ check('the refusal holds even though its messages parsed perfectly',
 const google = await Supplement.readGoogle(
   [new File([buildTakeoutZip()], 'takeout.zip', { type: 'application/zip' })], {});
 
+// End to end, through the real archive rather than the predicate alone.
+//
+// The fixture carries 2,000 Assistant rows — "Searched for an image",
+// "Invoked Circle to Search", two notification phrases — which is how a real
+// export looks: the interface events outnumber the questions and take the top
+// of a frequency-ranked list. Google files them under a product this parser
+// correctly treats as search, so nothing upstream separates them.
+//
+// This is the check that matters, because the predicate checks below pass
+// with the call to it deleted from addGoogleRecord — a function that exists
+// and is never run looks exactly like one that works.
+{
+  const terms = [...google.googleSearchTerms.keys()];
+  const noise = terms.filter(t => /^an image$|^invoked|notification/i.test(t));
+  check('interface events never become search terms',
+    noise.length === 0, noise.slice(0, 4).join(' | '));
+  check('and the real searches beside them still do',
+    terms.some(t => /half marathon training plan/.test(t)), terms.slice(0, 3).join(' | '));
+  // 2,000 of them against 1,200 real searches: if they were counted, they
+  // would be the most frequent thing in the archive by a wide margin.
+  check('so the count reflects questions asked, not buttons pressed',
+    google.counts.googleSearches < 2000,
+    google.counts.googleSearches + ' searches counted');
+}
+
 check('a Takeout yields all four My Activity services',
   ['youtube', 'youtubeSearches', 'googleSearches', 'chrome', 'gemini']
     .every(kind => google.kinds[kind]), Object.keys(google.kinds).join(', '));
@@ -2637,9 +2665,15 @@ check('digest declares its schema', digest.schema === 'psycheai-digest/1');
     stripped[0] === stripped[1],
     'first difference at char ' + [...stripped[0]].findIndex((c, i) => c !== stripped[1][i]));
 }
-// The app no longer asks for a name, so the export's own must come through —
-// mojibake repaired, since that is the name the other person will read.
-check('digest takes the name from the export', digest.profile.name === 'Aleç', digest.profile.name);
+// The export's name is read and then redacted before sending — the model is
+// given a marker, and the real one is put back onto the shareable card in the
+// browser. So this checks the reading still works (mojibake repaired, since
+// that is the name the reader's friends will see on the card) by way of the
+// signals, and that it does not survive into the digest.
+check('the name is read from the export, mojibake repaired',
+  signals.profile.name === 'Aleç', signals.profile.name);
+check('and is replaced before the digest is sent',
+  digest.profile.name === 'PsycheUser', digest.profile.name);
 check('digest carries complete counts', digest.counts.posts === 22 && digest.counts.postsLiked === 240);
 check('digest samples captions', digest.samples.captions.length > 0 && digest.samples.captions.length <= Digest.LIMITS.captions);
 // The prompt rule about whose life a caption describes is worth nothing if the
@@ -2651,8 +2685,153 @@ check('captions about other people reach the model, or the rule guards nothing',
   digest.samples.captions.some(c => c.includes('@mokkzy')) &&
   digest.samples.captions.some(c => c.includes('@yuhanchong')),
   digest.samples.captions.length + ' captions sampled');
-check('and the reader\'s own handle is there to compare them against',
-  digest.profile.username === 'alec.runs', JSON.stringify(digest.profile.username));
+// ---------- the reader's own handle ----------
+//
+// Replaced with a placeholder before anything is sent. Narrow on purpose, and
+// the comment in docs/digest.js is careful about what it does not buy: the
+// digest is not anonymous afterwards, because hundreds of the reader's own
+// captions are still in it and a following list identifies somebody better
+// than a handle does. What a handle uniquely is, is a lookup key — paste it
+// after instagram.com/ and you are looking at them.
+//
+// Other people's handles stay exactly as they were, which is not an oversight:
+// the prompt's hardest rule turns on telling one from the other, and the whole
+// value of a caption about @mokkzy is that it is evidence about @mokkzy.
+check('the reader\'s own handle is replaced with a placeholder',
+  digest.profile.username === 'PsycheUser', JSON.stringify(digest.profile.username));
+// Deliberately built with the handle planted in the body text, because the
+// real fixture never mentions it — so a check against that alone passes with
+// the deep walk deleted and proves only that one field was set. Planted in a
+// caption, a comment and a search, which are three different sampling paths
+// into the digest and would each have to be remembered separately by any
+// version of this that scrubbed at the extraction points instead.
+{
+  const planted = Digest.build({
+    ...signals,
+    captions: [{ text: 'shot by alec.runs, tagged @alec.runs, see you there', ts: 1700000000 }],
+    comments: [{ text: 'that was @alec.runs behind the camera', ts: 1700000000 }],
+    searches: [{ text: 'alec.runs', ts: 1700000000 }, { text: 'alec.runs', ts: 1700000001 }],
+  }, { includeMessages: false });
+  const serialised = JSON.stringify(planted).toLowerCase();
+  check('and it is scrubbed out of the body text too, not just the profile field',
+    !serialised.includes('alec.runs'),
+    (JSON.stringify(planted).match(/.{0,50}alec\.runs.{0,50}/i) || ['clean'])[0]);
+  check('with the placeholder left in its place rather than a hole',
+    serialised.includes('psycheuser'), JSON.stringify(planted.samples.captions).slice(0, 120));
+}
+check('while other people\'s handles survive, which is what the rule needs',
+  digest.samples.captions.some(c => c.includes('@mokkzy')) &&
+  digest.samples.captions.some(c => c.includes('@yuhanchong')));
+
+{
+  // A handle short enough to be an ordinary word is only replaced in its
+  // @-prefixed form. "@sam" is a link; "sam" in a sentence is a word, and
+  // rewriting it would corrupt the evidence to hide a string that was not
+  // identifying in that position anyway.
+  const shortHandle = Digest.build({
+    ...signals,
+    profile: { ...signals.profile, username: 'sam', name: 'Sam Tan' },
+    captions: [{ text: 'sam and @sam are different things entirely', ts: 1700000000 }],
+  }, { includeMessages: false });
+  const text = JSON.stringify(shortHandle.samples.captions);
+  check('a short handle is replaced where it is a link',
+    text.includes('@PsycheUser'), text);
+  check('but left alone where it is just a word',
+    /\bsam\b/.test(text), text);
+  check('and the profile field is replaced whatever the length',
+    shortHandle.profile.username === 'PsycheUser');
+
+  // An account with no display name falls back to the username, so on those
+  // the handle *is* the name — and the model is told to trust that field.
+  const noName = Digest.build({
+    ...signals,
+    profile: { ...signals.profile, username: 'quietaccount', name: '' },
+  }, { includeMessages: false });
+  check('an account whose name falls back to its handle has both replaced',
+    noName.profile.name === 'PsycheUser' && noName.profile.username === 'PsycheUser',
+    JSON.stringify(noName.profile));
+
+  // The prompt has to say the handle is a placeholder, or the model reasons
+  // about it as though the reader chose it — "@user" is exactly the kind of
+  // flat, anonymous handle a report would read something into.
+  check('the prompt tells the model the handle is a marker, not a name',
+    /PsycheUser/.test(prompts.PROFILE_SYSTEM) &&
+    /never quote one back/i.test(prompts.PROFILE_SYSTEM) &&
+    /draw no conclusion from it/i.test(prompts.PROFILE_SYSTEM));
+  check('and names the contact markers as well as the identity one',
+    /PsycheEmail/.test(prompts.PROFILE_SYSTEM) && /PsychePhone/.test(prompts.PROFILE_SYSTEM));
+  // The failure this guards is the model reasoning about a substitution that
+  // landed on an ordinary word, which is the one cost of a blunt scrub.
+  check('and warns that a marker on an ordinary word is a substitution, not a person writing strangely',
+    /is a substitution that landed on an ordinary word/i.test(prompts.PROFILE_SYSTEM));
+  check('and that everybody else\'s handle is still real, which is the rule it sits in',
+    /Everybody else's handle is untouched and real/i.test(prompts.PROFILE_SYSTEM));
+
+  // A digest built with no handle at all must come back unchanged rather than
+  // scrubbed to nothing by an empty pattern.
+  // The quality guard on the contact scrub, and the reason the phone patterns
+  // are as narrow as they are. This runs over captions and searches full of
+  // years, prices, scores and share codes, and a filter that ate those would
+  // cost more evidence than the phone numbers it caught were worth. Every
+  // string below is the shape of something in a real digest.
+  const keeps = Digest.build({
+    ...signals,
+    profile: { ...signals.profile, username: '', name: '' },
+    captions: [
+      { text: '1211 hk share price is up again, and usdsgd at 1.34', ts: 1700000000 },
+      { text: 'best of 2018, ran 42.2 km in 3:45:10 on 15 Jan', ts: 1700000001 },
+      { text: 'paid $1250 for it in 2024, worth every cent', ts: 1700000002 },
+      { text: 'scored 108 and 97 across two rounds', ts: 1700000003 },
+    ],
+  }, { includeMessages: false });
+  const kept = JSON.stringify(keeps.samples.captions);
+  check('ordinary numbers are not mistaken for phone numbers',
+    !kept.includes('PsychePhone'), kept);
+  check('and the figures themselves survive intact, which is the point',
+    /1211 hk/.test(kept) && /42\.2 km/.test(kept) && /\$1250/.test(kept) &&
+    /2018/.test(kept) && /108 and 97/.test(kept), kept);
+
+  // And the shapes that are phone numbers, which the narrowness must not have
+  // cost. Both halves have to hold or the pattern is worth nothing: a filter
+  // that catches everything and one that catches nothing are equally useless
+  // and only one of them is obvious.
+  const dialled = Digest.build({
+    ...signals,
+    profile: { ...signals.profile, username: '', name: '' },
+    captions: [
+      { text: 'call me on +65 9123 4567 when you land', ts: 1700000000 },
+      { text: 'the office line is 6123 4567 during the week', ts: 1700000001 },
+      { text: 'try 555-123-4567 or the other one', ts: 1700000002 },
+      { text: 'my number is 91234567 if you lost it', ts: 1700000003 },
+    ],
+  }, { includeMessages: false });
+  const scrubbed = JSON.stringify(dialled.samples.captions);
+  check('every shape of phone number is taken out',
+    (scrubbed.match(/PsychePhone/g) || []).length === 4, scrubbed);
+  check('and the sentence around it is kept, so the evidence survives',
+    /call me on/.test(scrubbed) && /when you land/.test(scrubbed) &&
+    /if you lost it/.test(scrubbed), scrubbed);
+
+  // No handle to match on, but a name — the redaction must still run on the
+  // name, and must not scrub the digest to nothing for want of a handle.
+  const noHandle = Digest.build({
+    ...signals, profile: { ...signals.profile, username: '', name: 'Only A Name' },
+  }, { includeMessages: false });
+  check('a digest with a name but no handle still has the name replaced',
+    noHandle.profile.name === 'PsycheUser' && noHandle.samples.captions.length > 0,
+    noHandle.profile.name);
+  // And with neither, nothing to match on at all: the pass must be a no-op on
+  // the identity half while still removing addresses and numbers.
+  const anonymous = Digest.build({
+    ...signals,
+    profile: { ...signals.profile, username: '', name: '' },
+    captions: [{ text: 'reach me on hello@example.com or +65 9123 4567 any time', ts: 1700000000 }],
+  }, { includeMessages: false });
+  const anonText = JSON.stringify(anonymous.samples.captions);
+  check('a digest with neither a handle nor a name still loses its contact details',
+    anonText.includes('PsycheEmail') && anonText.includes('PsychePhone') &&
+    !anonText.includes('example.com') && !anonText.includes('9123'), anonText);
+}
 
 // ---------- captions carry their year ----------
 //
@@ -2768,8 +2947,114 @@ check('digest carries the hour histogram', digest.rhythm.hourOfDay.length === 24
 check('digest carries the weekday histogram', digest.rhythm.dayOfWeek.length === 7);
 check('digest explains its histogram indexing', /0=Sunday/.test(digest.rhythm.note));
 check('digest measures posting regularity', typeof digest.rhythm.regularity === 'number');
-check('digest samples follows across the whole list',
-  digest.following.length === Digest.LIMITS.following || digest.following.length === signals.following.length);
+// The raw follow list is no longer sent — 637 opaque handles like
+// "ne_nay101144" cost 4.6% of a real digest and said almost nothing, which the
+// comment beside instagramTopics had already noticed. The *count* stays,
+// because that is what the prompt actually reasons from: "a person following
+// six hundred accounts and engaging with forty is paying for a subscription
+// they stopped reading" needs the six hundred, not the six hundred names.
+check('the raw follow list is not sent', digest.following === undefined);
+check('but the count it was read for still is',
+  digest.counts.following === signals.following.length,
+  digest.counts.following + ' vs ' + signals.following.length);
+// ---------- My Activity titles, cleaned ----------
+//
+// Every row arrives as a sentence — "Watched Conan O'Brien interviews
+// someone" — and only the part after the verb is evidence. The old pattern
+// matched the verb as `\S+(?:\s+\S+)?`, an optional second token meant for
+// the "for" in "Searched for". Being greedy it took that token whether or not
+// it was "for", so the first real word of every other title was deleted.
+// Silent, systematic, and worst exactly where the first word carries the
+// subject.
+{
+  const strip = Supplement.__testing.stripLeadingVerb;
+  check('a one-word verb is stripped and the title kept whole',
+    strip("Watched Conan O'Brien interviews someone") === "Conan O'Brien interviews someone",
+    strip("Watched Conan O'Brien interviews someone"));
+  check('"Searched for" is stripped as the two words it is',
+    strip('Searched for usdsgd') === 'usdsgd', strip('Searched for usdsgd'));
+  check('and a title whose second word matters keeps it',
+    strip('Viewed Most Controversial Tennis Match Ever') === 'Most Controversial Tennis Match Ever',
+    strip('Viewed Most Controversial Tennis Match Ever'));
+  check('a trailing bare URL goes with the verb',
+    strip('Viewed The Secret to a Powerful Forehand https://youtu.be/F7wv85YTnHQ') ===
+      'The Secret to a Powerful Forehand',
+    strip('Viewed The Secret to a Powerful Forehand https://youtu.be/F7wv85YTnHQ'));
+  check('a title with no leading verb is left alone',
+    strip('Pearlman full mentalist performance') === 'Pearlman full mentalist performance');
+
+  // Assistant and Discover are filed under the same product as Search,
+  // correctly — asking Google something is asking Google something. What is
+  // not a question is the interface event filed beside it. Left in, these
+  // dominate a frequency-ranked list: one real export opened with "an image
+  // ×9774" and "invoked circle to search ×783" before a single thing the
+  // reader had actually looked for.
+  const real = Supplement.__testing.isRealQuery;
+  for (const junk of ['an image', 'search', 'Invoked Circle to Search',
+    'received "time to leave" notification', 'dismissed an assistant notification',
+    'https://www.propertyguru.com.sg/project/parc-emily-120']) {
+    check('"' + junk.slice(0, 34) + '" is not counted as a search', real(junk) === false);
+  }
+  // And the filter has to be narrow enough that a real question survives it,
+  // which is the half that would make it worth reverting if it failed.
+  for (const query of ['an image of a barn owl', 'usdsgd', 'searching for a flat in bedok',
+    'goto share price', 'how to invoke a lambda']) {
+    check('"' + query.slice(0, 34) + '" still counts as a search', real(query) === true);
+  }
+}
+
+// ---------- what the Google block stopped carrying ----------
+//
+// `googleSearchSample` was 63 entries and 8,190 characters of truncated URLs —
+// visited pages, not searches, despite the name. The domain was already in
+// topDomains and the slug was a headline cut mid-word. Worst signal per
+// character in the digest.
+{
+  const g = {
+    source: 'google', span: {}, counts: { watched: 1, youtubeSearches: 0, googleSearches: 3, browsed: 1, prompts: 0 },
+    kinds: { googleSearches: true },
+    channels: new Map(), youtubeSearchTerms: new Map(),
+    googleSearchTerms: new Map([['usdsgd', 4], ['parc emily', 2]]),
+    domains: new Map([['cna.com', 3]]),
+    videoTitles: [], youtubeSearches: [],
+    googleSearches: ['https://www.cnbc.com/2026/04/14/some-long-article-slug-that-goes-on'],
+    geminiPrompts: [],
+  };
+  const withGoogle = Digest.build({ ...signals, supplements: { google: g } }, { includeMessages: false });
+  check('the Google block no longer carries a sample of visited URLs',
+    withGoogle.google.googleSearchSample === undefined,
+    JSON.stringify(Object.keys(withGoogle.google)));
+  check('but the ranked search terms it was sitting beside are still there',
+    withGoogle.google.topGoogleSearches.length === 2,
+    JSON.stringify(withGoogle.google.topGoogleSearches));
+  check('and no URL survives anywhere in the Google block',
+    !/https?:\/\//.test(JSON.stringify(withGoogle.google)),
+    JSON.stringify(withGoogle.google).slice(0, 200));
+}
+
+// Links in the reader's own messages. A shared ride-tracking link is not
+// something to reason about and costs the same per character as a sentence:
+// 44 of 1,000 messages in a real export carried one, 6,400 characters between
+// them. The sentence around a link is the evidence, so the message stays.
+{
+  const linked = Digest.build({
+    ...signals,
+    messages: {
+      total: 3, threads: 1, groupThreads: 0, sent: 3, received: 0, avgSentLength: 60,
+      ownTexts: [
+        'Can try this? https://maps.app.goo.gl/oM3aGYK But if you prefer kbbq, go beside',
+        'https://s.grab.com/ride/CH8UURGTA1BS73A23GH0',
+        'no link in this one at all, just a sentence',
+      ],
+    },
+  }, { includeMessages: true });
+  const sample = linked.directMessages.ownMessageSample.join(' | ');
+  check('links are stripped out of the message sample',
+    !/https?:\/\//.test(sample), sample);
+  check('and the sentence around the link is kept, not the message dropped',
+    /Can try this\?/.test(sample) && /prefer kbbq/.test(sample), sample);
+}
+
 check('digest passes through Instagram\'s own topics', digest.instagramTopics.includes('Running'));
 check('digest ranks most-liked accounts', digest.mostLikedAccounts.length > 0 && digest.mostLikedAccounts[0].count > 0);
 check('digest tells the model how to read its own coverage numbers',
@@ -2854,7 +3139,7 @@ check('no message text survives redaction, own or otherwise',
 // became "review, then remove more than was asked".
 check('omitMessages touches nothing outside the message fields',
   redacted.samples.captions.length === withDms.samples.captions.length &&
-  redacted.following.length === withDms.following.length &&
+  redacted.mostLikedAccounts.length === withDms.mostLikedAccounts.length &&
   redacted.coverage.stillsInArchive === withDms.coverage.stillsInArchive);
 // Calling it on a digest that was never given messages in the first place —
 // a future caller passing one straight through, say — must be a no-op, not
@@ -2877,7 +3162,7 @@ check('omitCaptionsAndComments zeroes the sampling coverage rather than leaving 
   captionsRedacted.coverage.sampling.captions.shown === 0 &&
   captionsRedacted.coverage.sampling.comments.shown === 0);
 check('omitCaptionsAndComments leaves the rest of the digest untouched',
-  captionsRedacted.following.length === digest.following.length &&
+  captionsRedacted.mostLikedAccounts.length === digest.mostLikedAccounts.length &&
   captionsRedacted.instagramTopics.length === digest.instagramTopics.length);
 
 const activityRedacted = Digest.omitActivity(Digest.build(signals, { includeMessages: false }));
@@ -2885,14 +3170,12 @@ check('omitActivity removes both counts and rhythm entirely',
   activityRedacted.counts === undefined && activityRedacted.rhythm === undefined);
 check('omitActivity leaves the rest of the digest untouched',
   activityRedacted.samples.captions.length === digest.samples.captions.length &&
-  activityRedacted.following.length === digest.following.length);
+  activityRedacted.mostLikedAccounts.length === digest.mostLikedAccounts.length);
 
 const accountsRedacted = Digest.omitAccounts(Digest.build(signals, { includeMessages: false }));
-check('omitAccounts empties following and every engagement list',
-  accountsRedacted.following.length === 0 && accountsRedacted.mostLikedAccounts.length === 0 &&
+check('omitAccounts empties every engagement list',
+  accountsRedacted.mostLikedAccounts.length === 0 &&
   accountsRedacted.mostSavedAccounts.length === 0 && accountsRedacted.mostEngagedWith.length === 0);
-check('omitAccounts removes the following sampling coverage that named it',
-  accountsRedacted.coverage.sampling.following === undefined);
 check('omitAccounts leaves the rest of the digest untouched',
   accountsRedacted.samples.captions.length === digest.samples.captions.length &&
   accountsRedacted.instagramTopics.length === digest.instagramTopics.length);
@@ -2901,7 +3184,7 @@ const topicsRedacted = Digest.omitTopics(Digest.build(signals, { includeMessages
 check('omitTopics empties both Instagram-inferred lists',
   topicsRedacted.instagramTopics.length === 0 && topicsRedacted.instagramAdInterests.length === 0);
 check('omitTopics leaves the rest of the digest untouched',
-  topicsRedacted.following.length === digest.following.length &&
+  topicsRedacted.mostLikedAccounts.length === digest.mostLikedAccounts.length &&
   topicsRedacted.samples.searches.length === digest.samples.searches.length);
 
 const searchesRedacted = Digest.omitSearches(Digest.build(signals, { includeMessages: false }));
@@ -3051,11 +3334,21 @@ function heavySignals() {
 }
 
 const heavy = Digest.build(heavySignals(), { includeMessages: false });
+// heavySignals() carries no messages, so this adds a realistic pile of them:
+// the message sample is the largest list in a real digest and needs a heavy
+// case of its own to measure the cap and the coverage against.
+const heavyWithDms = Digest.build({
+  ...heavySignals(),
+  messages: {
+    total: 9000, threads: 120, groupThreads: 8, sent: 5000, received: 4000,
+    avgSentLength: 90,
+    ownTexts: Array.from({ length: 5000 }, (_, i) => 'A message of a fairly ordinary length, number ' + i),
+  },
+}, { includeMessages: true });
 
 check('heavy account caps captions', heavy.samples.captions.length === Digest.LIMITS.captions,
   heavy.samples.captions.length + ' captions');
 check('heavy account caps comments', heavy.samples.comments.length === Digest.LIMITS.comments);
-check('heavy account caps following', heavy.following.length === Digest.LIMITS.following);
 check('heavy account caps liked accounts', heavy.mostLikedAccounts.length === Digest.LIMITS.likedAuthors);
 check('heavy account caps topics', heavy.instagramTopics.length === Digest.LIMITS.topics);
 check('heavy account still fits the total budget',
@@ -3068,9 +3361,11 @@ check('digest reports how much of each source was sampled',
   heavy.coverage.sampling.captions.shown === Digest.LIMITS.captions &&
   heavy.coverage.sampling.captions.available === 4000,
   JSON.stringify(heavy.coverage.sampling.captions));
-check('sampling coverage is reported for follows too',
-  heavy.coverage.sampling.following.shown === Digest.LIMITS.following &&
-  heavy.coverage.sampling.following.available === 4000);
+check('sampling coverage is reported for the message sample too',
+  heavyWithDms.coverage.sampling.ownMessages.shown ===
+    heavyWithDms.directMessages.ownMessageSample.length &&
+  heavyWithDms.coverage.sampling.ownMessages.available > 0,
+  JSON.stringify(heavyWithDms.coverage.sampling.ownMessages));
 check('sampling counts stay honest on a small account',
   digest.coverage.sampling.captions.shown === digest.samples.captions.length &&
   digest.coverage.sampling.captions.available === signals.captions.length);
@@ -3177,7 +3472,13 @@ check('and it is no longer the old hardcoded number', Digest.LIMITS.totalChars !
 // ceiling for the test is the only way to exercise the loop at all, and it is
 // the honest half of the choice: raising the caps instead would be rebuilding
 // the `comprehensive` depth that was just removed for being unreachable.
-const TRIM_BUDGET = 150000;
+// Below what the heavy fixture actually produces, so the loop is forced to
+// run. Was 150,000, which stopped applying any pressure once the raw follow
+// list came out of the digest — that list was most of the difference, and a
+// budget the fixture already fits under makes every check below it vacuous.
+// Measured at 120,716 for the heavy account with no messages; 90,000 leaves
+// the loop real work to do.
+const TRIM_BUDGET = 90000;
 const hugeGoogle = {
   ...google,
   videoTitles: Array.from({ length: 4000 }, (_, i) =>
@@ -3195,9 +3496,9 @@ const crowded = Digest.build({ ...heavySignals(), supplements: { google: hugeGoo
 // per-source caps — nothing but the loop does that.
 check('the trim loop really did fire, or the checks below prove nothing',
   crowded.google.videoTitleSample.length < 1000 &&
-  crowded.google.googleSearchSample.length < 1000,
+  crowded.google.topGoogleSearches.length < 1000,
   crowded.google.videoTitleSample.length + ' titles, ' +
-  crowded.google.googleSearchSample.length + ' searches kept of 3000 allowed');
+  crowded.google.topGoogleSearches.length + ' search terms kept');
 // The invariant that actually matters, and the one the ordering exists to
 // deliver: **every supplement list is driven to its floor before a single
 // Instagram caption is touched.** 4,000 video titles and 6,000 Google searches
@@ -3205,12 +3506,12 @@ check('the trim loop really did fire, or the checks below prove nothing',
 // go first", and it is checked directly rather than inferred from the caption
 // count.
 check('every supplement list is trimmed to its floor before Instagram is touched',
-  [crowded.google.videoTitleSample, crowded.google.googleSearchSample,
+  [crowded.google.videoTitleSample, crowded.google.topGoogleSearches,
     crowded.google.topGoogleSearches, crowded.google.topChannels,
     crowded.google.topDomains, crowded.google.geminiPromptSample]
     .every(list => list.length <= 10),
   JSON.stringify({ titles: crowded.google.videoTitleSample.length,
-    searches: crowded.google.googleSearchSample.length,
+    searches: crowded.google.topGoogleSearches.length,
     channels: crowded.google.topChannels.length }));
 
 // Captions used to be checked for *no* loss at all, and that held while there
@@ -3240,7 +3541,7 @@ check('the crowded digest still lands inside the budget',
 const omitCases = [
   ['omitYouTube', d => d.google.topChannels.length === 0 && d.google.videoTitleSample.length === 0],
   ['omitYouTubeSearches', d => d.google.topYoutubeSearches.length === 0],
-  ['omitGoogleSearches', d => d.google.topGoogleSearches.length === 0 && d.google.googleSearchSample.length === 0],
+  ['omitGoogleSearches', d => d.google.topGoogleSearches.length === 0],
   ['omitChrome', d => d.google.topDomains.length === 0],
   ['omitGeminiPrompts', d => d.google.geminiPromptSample.length === 0],
   ['omitFacebookPosts', d => d.facebook.postSample.length === 0 && d.facebook.commentSample.length === 0],
@@ -3256,7 +3557,7 @@ for (const [name, emptied] of omitCases) {
   // "everything else", the same way the Instagram omit checks do above.
   check(name + ' leaves the rest of the digest untouched',
     fresh.samples.captions.length === withBoth.samples.captions.length &&
-    fresh.following.length === withBoth.following.length);
+    fresh.mostLikedAccounts.length === withBoth.mostLikedAccounts.length);
 }
 // Calling one for a source the reader never added must be a no-op, not a
 // crash reaching into an absent block.
@@ -3342,16 +3643,31 @@ check('a heavy account plus a maxed-out supplement still fits the real budget', 
   // The loop has to reach whichever list is actually large. It used to touch
   // captions and comments only, which was safe while every other cap was in
   // the low hundreds and is not safe now that they are not.
+  //
+  // Driven through the message sample, which is both the largest list in a
+  // real digest — about half of it — and the one that was missing from the
+  // trimmable table altogether while Facebook's equivalent sat in it. Left
+  // out, the budget was enforced against everything except the field most
+  // likely to break it, and the loop would shave a quarter of the captions
+  // rather than touch a message.
   const monstrous = Digest.build({
     ...heavySignals(),
     captions: many(200, i => 'Short caption ' + i),
     comments: many(200, i => 'Short comment ' + i),
-    following: many(120000, i => ({ name: 'an_account_with_a_fairly_long_handle_' + i, ts: 0 })),
-  }, { includeMessages: false, maxChars: 60000 });
+    messages: {
+      total: 20000, threads: 200, groupThreads: 10, sent: 12000, received: 8000,
+      avgSentLength: 120,
+      ownTexts: many(4000, i => 'A message long enough to matter to the budget, number ' + i),
+    },
+  }, { includeMessages: true, maxChars: 60000 });
 
   check('the trimming reaches the list that is actually oversized',
-    monstrous.following.length < Digest.LIMITS.following,
-    monstrous.following.length + ' follows kept');
+    monstrous.directMessages.ownMessageSample.length < Digest.LIMITS.messages,
+    monstrous.directMessages.ownMessageSample.length + ' messages kept');
+  check('and says so in the coverage rather than reporting the pre-trim count',
+    monstrous.coverage.sampling.ownMessages.shown ===
+      monstrous.directMessages.ownMessageSample.length,
+    JSON.stringify(monstrous.coverage.sampling.ownMessages));
   check('trimming does not gut the short lists to spare the long one',
     monstrous.samples.captions.length === 200 && monstrous.samples.comments.length === 200,
     monstrous.samples.captions.length + ' captions, ' + monstrous.samples.comments.length + ' comments');
@@ -3368,14 +3684,12 @@ check('a heavy account plus a maxed-out supplement still fits the real budget', 
     following: many(900, i => ({ name: 'account_number_' + i, ts: 0 })),
   }, { includeMessages: false });
 
-  check('an ordinary account gets every caption, comment and follow',
-    ordinary.samples.captions.length === 300 && ordinary.samples.comments.length === 200 &&
-    ordinary.following.length === 900,
-    ordinary.samples.captions.length + '/' + ordinary.samples.comments.length + '/' +
-    ordinary.following.length);
+  check('an ordinary account gets every caption and comment',
+    ordinary.samples.captions.length === 300 && ordinary.samples.comments.length === 200,
+    ordinary.samples.captions.length + '/' + ordinary.samples.comments.length);
   check('and coverage then reports the whole of it, not a fraction',
     ordinary.coverage.sampling.captions.shown === ordinary.coverage.sampling.captions.available &&
-    ordinary.coverage.sampling.following.shown === ordinary.coverage.sampling.following.available);
+    ordinary.coverage.sampling.comments.shown === ordinary.coverage.sampling.comments.available);
 }
 
 // The budget is the cost ceiling expressed in characters, so the arithmetic
@@ -3433,13 +3747,6 @@ check('nothing exports an image count any more', Digest.IMAGES === undefined);
 check('the prompt tells the model to use the sampling coverage',
   /coverage\.sampling/.test(prompts.PROFILE_SYSTEM));
 
-// Follows are sampled across the whole list, not just the head — otherwise a
-// long-standing account is read entirely from who they followed years ago.
-check('follows are sampled across the whole list, not the head',
-  heavy.following.includes('account_number_0') && heavy.following.some(name => {
-    const n = Number(name.replace('account_number_', ''));
-    return n > 3000;
-  }));
 
 // ---------- mock analysis and the card ----------
 

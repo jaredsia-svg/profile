@@ -19,7 +19,6 @@
     captions: 560,
     comments: 360,
     messages: 1000,
-    following: 1000,
     likedAuthors: 240,
     savedAuthors: 120,
     searches: 160,
@@ -35,7 +34,6 @@
     youtubeTitles: 150,
     youtubeSearches: 100,
     googleSearchTerms: 150,
-    googleSearches: 150,
     chromeDomains: 100,
     geminiPrompts: 80,
     fbPosts: 200,
@@ -189,7 +187,13 @@
   // those two letters were the ones readers reported as wrong, and the cost
   // is ~8,750 characters off the digest ceiling — a trade of some sampled
   // captions for two of the four letters being right more often.
-  const FIXED_INPUT_TOKENS = 21400;
+  // Raised to 21,600 when the redaction markers were explained to the model
+  // and the consumption read was rewritten around counts.following. Measured
+  // at 21,444; the extra is the same small headroom this number has always
+  // carried so an ordinary edit does not immediately invalidate it. The check
+  // in tools/selftest.mjs caught the overrun the run it happened, which is the
+  // whole reason it exists.
+  const FIXED_INPUT_TOKENS = 21600;
 
   // lib/gemini.js caps generation here, so this is the most output — visible
   // report plus thinking — that a single call can possibly bill for. Held to
@@ -527,7 +531,6 @@
       // noisy than anything derived from raw follows.
       instagramTopics: signals.topics.slice(0, LIMITS.topics),
       instagramAdInterests: signals.adInterests.slice(0, LIMITS.adInterests),
-      following: sampleEvenly(signals.following.map(f => f.name), LIMITS.following),
       mostLikedAccounts: topKeys(signals.likedAuthors, LIMITS.likedAuthors),
       mostSavedAccounts: topKeys(signals.savedAuthors, LIMITS.savedAuthors),
       mostEngagedWith: topKeys(signals.commentedOn, 40),
@@ -562,7 +565,6 @@
         sampling: {
           captions: { shown: 0, available: signals.captions.length },
           comments: { shown: 0, available: signals.comments.length },
-          following: { shown: 0, available: signals.following.length },
           // `available` is distinct terms, not raw searches — the list is a
           // histogram, so the honest denominator is how many different things
           // were searched for, not how many times.
@@ -573,7 +575,6 @@
 
     digest.coverage.sampling.captions.shown = digest.samples.captions.length;
     digest.coverage.sampling.comments.shown = digest.samples.comments.length;
-    digest.coverage.sampling.following.shown = digest.following.length;
     digest.coverage.sampling.searches.shown = digest.samples.searches.length;
 
     if (opts.includeMessages && messages.total) {
@@ -594,7 +595,12 @@
         receivedByUser: messages.received,
         averageSentLength: messages.avgSentLength,
         note: 'Only the user\'s own messages are sampled below. The other side of every conversation was counted and discarded.',
-        ownMessageSample: sampleTexts(messages.ownTexts, LIMITS.messages, 240),
+        // Links stripped before sampling. A shared Grab ride-tracking link or
+        // a maps URL is not something to reason about, and it costs the same
+        // per character as a sentence does: 44 of 1,000 messages in a real
+        // export carried one, at 6,400 characters between them. What surrounds
+        // a link is the evidence, so the message is kept and the URL is not.
+        ownMessageSample: sampleTexts(messages.ownTexts.map(stripLinks), LIMITS.messages, 240),
       };
       digest.coverage.sampling.ownMessages = {
         shown: digest.directMessages.ownMessageSample.length,
@@ -603,7 +609,211 @@
     }
 
     applySupplements(digest, signals.supplements || {});
+    // Before the trim, so the budget is measured against the text that will
+    // actually be sent rather than a slightly longer draft of it.
+    redactOwnHandle(digest, signals.profile.username, signals.profile.name);
     trimToBudget(digest, maxChars);
+    return digest;
+  }
+
+  // ---------- the reader's own handle ----------
+  //
+  // What the model is told the reader is called, instead of what they are
+  // called. Everything else in the digest stays as it is — including other
+  // people's handles, which the report needs in order to work out that a
+  // caption about @someone is evidence about @someone.
+  //
+  // The point is narrow and worth stating exactly, because it would be easy to
+  // oversell. This does not anonymise the digest and nothing here should claim
+  // it does: hundreds of the reader's own captions remain, and a following list
+  // of a thousand accounts identifies a person more reliably than their handle
+  // does. What a handle is, uniquely among the fields here, is a *lookup key* —
+  // paste it after instagram.com/ and you are looking at them. It is also the
+  // string a grep would find if a digest ever landed somewhere it should not
+  // have. Removing the cheapest path to a name is worth doing on its own terms;
+  // it is not the same as making the evidence unattributable, and the FAQ must
+  // not start saying otherwise.
+  //
+  // It also makes the prompt's hardest rule easier rather than harder. That
+  // rule turns on telling the reader's handle from everybody else's — "the
+  // reader's own handle is in profile.username; any other @handle is somebody
+  // else" — and a reserved token that appears nowhere in a real export is a
+  // cleaner thing to match on than a handle that might read like an ordinary
+  // word.
+  const OWN_HANDLE = 'PsycheUser';
+
+  // The markers. Coined words rather than ordinary ones, and that is the whole
+  // design: a substitution has to be unmistakable for a substitution.
+  //
+  // The first version used "user" for the handle and "[name]" for the name.
+  // Both are wrong in the same way — "user" is an ordinary English word that
+  // appears in real captions and real searches, so a model cannot tell the
+  // placeholder from the word, and neither can a reader looking at the review
+  // screen. "PsycheUser" appears in no export ever written. It survives being
+  // read as a name, it cannot be mistaken for something the reader typed, and
+  // where a redaction lands somewhere unlucky — a reader surnamed Brown, whose
+  // "brown rice" becomes "PsycheUser rice" — the result reads as a token that
+  // was put there rather than as a sentence that means something odd.
+  const NAME_MARK = 'PsycheUser';
+  const EMAIL_MARK = 'PsycheEmail';
+  const PHONE_MARK = 'PsychePhone';
+
+  // Any address, anyone's. The best value in this whole pass: an address is an
+  // unambiguous identifier, it turns up in exactly the places that carry the
+  // most of them — a searched inbox, a drafted email pasted to an assistant —
+  // and removing it costs nothing, because "emailed someone about the invoice"
+  // is the entire finding either way.
+  const EMAIL = /\b[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+\b/g;
+
+  // Phone numbers, conservatively. Each pattern has to look like a number
+  // somebody would dial and unlike a number somebody would write for any other
+  // reason, because this runs over captions and searches full of years,
+  // prices, scores and share codes.
+  //
+  //   +6591234567, +1 (555) 123-4567  — a leading + is close to unambiguous
+  //   9123 4567, 555-123-4567         — separated groups, at least two breaks
+  //                                     or a 4-4 split, which a year or a
+  //                                     price does not produce
+  //   91234567                        — eight or more digits unbroken, which
+  //                                     is past the length of a year, a
+  //                                     score, or an ordinary price
+  //
+  // Deliberately not matching four- to seven-digit runs. "1211 hk share price"
+  // and "[2018]" are real strings in a real digest, and a filter that ate them
+  // would cost more evidence than the phone numbers it caught were worth.
+  const PHONES = [
+    /\+\d[\d\s().-]{6,16}\d/g,
+    /\b\d{3,4}[\s.-]\d{3,4}[\s.-]\d{3,4}\b/g,
+    /\b\d{4}[\s.-]\d{4}\b/g,
+    /\b\d{8,15}\b/g,
+  ];
+
+  // Bare occurrences are only replaced for handles long enough that the word
+  // is unlikely to be anything else. A three-letter handle like "art" or "sam"
+  // appears inside ordinary sentences constantly, and replacing those would
+  // corrupt the evidence to hide a string that was not identifying in that
+  // position anyway. The @-prefixed form is always replaced, at any length,
+  // because @sam is a link and sam is a word.
+  const BARE_HANDLE_MIN = 5;
+
+  // Bare URLs, wherever they sit in a line. Replaced with nothing rather than
+  // a marker: unlike an address or a phone number, a link is not a redaction —
+  // it is a thing that was never worth its characters.
+  function stripLinks(text) {
+    return String(text || '').replace(/\s*https?:\/\/\S+/gi, ' ').replace(/\s{2,}/g, ' ').trim();
+  }
+
+  function escapeForRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  /**
+   * Replace the reader's own handle throughout a built digest, in place.
+   *
+   * Applied to the assembled object rather than at each extraction point, so a
+   * field added later is covered without anybody remembering to cover it —
+   * which is the failure this kind of pass usually has.
+   */
+  function redactOwnHandle(digest, handle, fullName) {
+    const own = String(handle || '').trim().replace(/^@+/, '');
+    const name = String(fullName || '').trim();
+
+    // Handle rules, in the order they must run. Longest first, so a full name
+    // is taken as a phrase before its parts are considered separately.
+    const named = [];
+    if (own) {
+      named.push([new RegExp('@' + escapeForRegExp(own) + '\\b', 'gi'), '@' + OWN_HANDLE]);
+      if (own.length >= BARE_HANDLE_MIN) {
+        named.push([new RegExp('\\b' + escapeForRegExp(own) + '\\b', 'gi'), OWN_HANDLE]);
+      }
+    }
+    if (name) {
+      // The whole name always, whatever its length: "Li Wei" as a phrase is
+      // the reader and is not two ordinary words in that order by accident.
+      named.push([new RegExp('\\b' + escapeForRegExp(name).replace(/\\?\s+/g, '\\s+') + '\\b', 'gi'), NAME_MARK]);
+      // Individual parts only when long enough not to be an ordinary word.
+      // This is where a careless version does damage: a reader surnamed Brown
+      // would have "brown rice" rewritten in their own captions. Five
+      // characters is not a guarantee — it is the line past which the trade
+      // stops favouring the word — and the marker is what keeps the cost
+      // legible when it is wrong, since "[name] rice" reads as a redaction
+      // and "user rice" reads as a mistake.
+      for (const part of name.split(/\s+/)) {
+        if (part.length >= BARE_HANDLE_MIN) {
+          named.push([new RegExp('\\b' + escapeForRegExp(part) + '\\b', 'gi'), NAME_MARK]);
+        }
+      }
+    }
+    // Nothing to match against and no addresses or numbers worth removing.
+    if (!named.length) return redactContacts(digest);
+
+    const scrub = text => named.reduce(
+      (out, [pattern, mark]) => out.replace(pattern, mark), text);
+
+    const walk = node => {
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) {
+          if (typeof node[i] === 'string') node[i] = scrub(node[i]);
+          else if (node[i] && typeof node[i] === 'object') walk(node[i]);
+        }
+        return;
+      }
+      for (const key of Object.keys(node)) {
+        const value = node[key];
+        if (typeof value === 'string') node[key] = scrub(value);
+        else if (value && typeof value === 'object') walk(value);
+      }
+    };
+    walk(digest);
+
+    // Set rather than scrubbed, because these two are the fields the model is
+    // told to trust: `profile.username` is what the "whose sentence is this"
+    // rule matches against, and `profile.name` falls back to the username on
+    // an account with no display name, so on those the handle *is* the name
+    // and a whole-word scrub would leave a short one sitting there.
+    if (digest.profile) {
+      if (own) digest.profile.username = OWN_HANDLE;
+      const shown = String(digest.profile.name || '').trim();
+      if (shown && (shown.toLowerCase() === own.toLowerCase() || name)) {
+        digest.profile.name = own && shown.toLowerCase() === own.toLowerCase()
+          ? OWN_HANDLE : NAME_MARK;
+      }
+    }
+    return redactContacts(digest);
+  }
+
+  /**
+   * Addresses and phone numbers, anyone's, everywhere.
+   *
+   * Separate from the pass above because it matches on shape rather than on
+   * who the reader is: it needs nothing to compare against and so runs even on
+   * a digest with no handle and no name to work from. Kept as its own function
+   * for that reason — the identity pass has an early return, and folding these
+   * into it once meant a nameless account kept every address in its messages.
+   */
+  function redactContacts(digest) {
+    const scrub = text => {
+      // Addresses first. A phone pattern would otherwise take the digits out
+      // of an address like j.smith2024@mail.com and leave a broken one behind.
+      let out = text.replace(EMAIL, EMAIL_MARK);
+      for (const pattern of PHONES) out = out.replace(pattern, PHONE_MARK);
+      return out;
+    };
+    const walk = node => {
+      if (Array.isArray(node)) {
+        for (let i = 0; i < node.length; i++) {
+          if (typeof node[i] === 'string') node[i] = scrub(node[i]);
+          else if (node[i] && typeof node[i] === 'object') walk(node[i]);
+        }
+        return;
+      }
+      for (const key of Object.keys(node)) {
+        const value = node[key];
+        if (typeof value === 'string') node[key] = scrub(value);
+        else if (value && typeof value === 'object') walk(value);
+      }
+    };
+    walk(digest);
     return digest;
   }
 
@@ -635,16 +845,12 @@
         videoTitleSample: sampleTexts(g.videoTitles, LIMITS.youtubeTitles, 120),
         topYoutubeSearches: topKeys(g.youtubeSearchTerms, LIMITS.youtubeSearches, 4),
         topGoogleSearches: topKeys(g.googleSearchTerms, LIMITS.googleSearchTerms, 4),
-        googleSearchSample: sampleTexts(g.googleSearches, LIMITS.googleSearches, 120),
         // Hostnames, never URLs — the path and query never leave supplement.js.
         topDomains: topKeys(g.domains, LIMITS.chromeDomains),
         geminiPromptSample: sampleTexts(g.geminiPrompts, LIMITS.geminiPrompts, 300),
       };
       digest.coverage.sampling.youtubeTitles = {
         shown: digest.google.videoTitleSample.length, available: g.counts.watched,
-      };
-      digest.coverage.sampling.googleSearches = {
-        shown: digest.google.googleSearchSample.length, available: g.counts.googleSearches,
       };
       digest.coverage.sampling.geminiPrompts = {
         shown: digest.google.geminiPromptSample.length, available: g.counts.prompts,
@@ -694,6 +900,15 @@
   function addSupplements(digest, supplements, options) {
     const opts = options || {};
     applySupplements(digest, supplements || {});
+    // The handle is not recoverable from the digest by this point — that is the
+    // whole idea — so the caller supplies it when it still has the archive in
+    // memory. When it does not (a reader merging a Google export into a stored
+    // digest in a fresh tab), the supplement's own text goes unscrubbed. That
+    // is a narrow gap: a Google or Facebook export mentioning the reader's
+    // Instagram handle means they searched for their own profile, or typed it
+    // to an assistant. Worth closing where it is free, not worth asking for an
+    // Instagram export again to close.
+    redactOwnHandle(digest, opts.ownHandle, opts.ownName);
     trimToBudget(digest, opts.maxChars || LIMITS.totalChars);
     return digest;
   }
@@ -711,10 +926,19 @@
   // instead of gutting captions to spare a list of account names.
   function trimToBudget(digest, maxChars) {
     const trimmable = [
+      // The reader's own messages, which were missing from this list entirely
+      // while Facebook's equivalent sat in the supplement list below. It is
+      // the largest thing in a typical digest by a wide margin — around half
+      // of it — so leaving it out meant the budget was enforced against
+      // everything except the field most likely to blow it, and the trimmer
+      // would cut a quarter of the captions rather than touch a message.
+      // First in the list because being first costs nothing: the loop picks
+      // whichever list is largest, not whichever is earliest.
+      ['ownMessages', () => digest.directMessages && digest.directMessages.ownMessageSample,
+        v => { digest.directMessages.ownMessageSample = v; }],
       ['captions', () => digest.samples.captions, v => { digest.samples.captions = v; }],
       ['comments', () => digest.samples.comments, v => { digest.samples.comments = v; }],
       ['searches', () => digest.samples.searches, v => { digest.samples.searches = v; }],
-      ['following', () => digest.following, v => { digest.following = v; }],
       ['mostLikedAccounts', () => digest.mostLikedAccounts, v => { digest.mostLikedAccounts = v; }],
       ['mostSavedAccounts', () => digest.mostSavedAccounts, v => { digest.mostSavedAccounts = v; }],
       ['instagramTopics', () => digest.instagramTopics, v => { digest.instagramTopics = v; }],
@@ -728,7 +952,6 @@
     // report is written from; a supplement is an addition. Additions go first.
     const trimmableSupplements = [
       ['videoTitleSample', () => digest.google && digest.google.videoTitleSample, v => { digest.google.videoTitleSample = v; }],
-      ['googleSearchSample', () => digest.google && digest.google.googleSearchSample, v => { digest.google.googleSearchSample = v; }],
       ['topGoogleSearches', () => digest.google && digest.google.topGoogleSearches, v => { digest.google.topGoogleSearches = v; }],
       ['topYoutubeSearches', () => digest.google && digest.google.topYoutubeSearches, v => { digest.google.topYoutubeSearches = v; }],
       ['topChannels', () => digest.google && digest.google.topChannels, v => { digest.google.topChannels = v; }],
@@ -778,8 +1001,13 @@
 
     digest.coverage.sampling.captions.shown = digest.samples.captions.length;
     digest.coverage.sampling.comments.shown = digest.samples.comments.length;
-    digest.coverage.sampling.following.shown = digest.following.length;
     digest.coverage.sampling.searches.shown = digest.samples.searches.length;
+    // Refreshed like the three above, now that this list is trimmable: a
+    // "shown" that still claimed the pre-trim count would misreport the
+    // sampling to the reader reviewing it and to the model reading coverage.
+    if (digest.coverage.sampling.ownMessages && digest.directMessages) {
+      digest.coverage.sampling.ownMessages.shown = digest.directMessages.ownMessageSample.length;
+    }
     digest.coverage.digestChars = encoded.length;
 
     return digest;
@@ -832,11 +1060,9 @@
   }
 
   function omitAccounts(digest) {
-    digest.following = [];
     digest.mostLikedAccounts = [];
     digest.mostSavedAccounts = [];
     digest.mostEngagedWith = [];
-    if (digest.coverage && digest.coverage.sampling) delete digest.coverage.sampling.following;
     return digest;
   }
 
@@ -879,7 +1105,6 @@
   function omitGoogleSearches(digest) {
     if (!digest.google) return digest;
     digest.google.topGoogleSearches = [];
-    digest.google.googleSearchSample = [];
     if (digest.coverage && digest.coverage.sampling) delete digest.coverage.sampling.googleSearches;
     return digest;
   }

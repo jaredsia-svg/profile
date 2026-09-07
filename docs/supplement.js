@@ -130,16 +130,47 @@
     return '';
   }
 
-  // The cosmetic last resort. Google writes "Watched <title>" / "Prompted
-  // <text>" and localises the verb, so this strips a leading word or two only
-  // when the separator is unambiguous, and returns the original otherwise.
-  // Nothing is ever classified on the result.
+  // The cosmetic last resort, and never a classifier: Google localises these
+  // verbs, so anything that depends on the result would break in German. My
+  // Activity phrases every row as a sentence — "Watched Conan O'Brien
+  // interviews someone", "Searched for usdsgd" — and only the part after the
+  // verb is evidence.
+  //
+  // This used to match the verb with `\S+(?:\s+\S+)?`, an optional second
+  // token meant for the "for" in "Searched for". Being greedy, it took that
+  // second token whether or not it was "for", so the first real word of every
+  // other title was deleted: "Watched Conan O'Brien interviews someone" came
+  // through as "O'Brien interviews someone", and "Viewed Most Controversial
+  // Tennis Match Ever" lost its "Most". Silent, systematic, and worst on
+  // exactly the titles where the first word carries the subject.
+  //
+  // Naming the verbs in the pattern instead of counting tokens fixes it: one
+  // verb, an optional "for", and everything after is kept. A trailing bare URL
+  // goes with it — My Activity appends one when it has no title to show, and a
+  // watch link is not something to reason about.
+  const ACTIVITY_VERB = /^\s*(?:watched|searched|visited|prompted|used|viewed)\s+(?:for\s+)?(.{4,})$/i;
+
+  // Interface events that arrive filed as searches. Anchored and specific
+  // rather than a keyword sweep: "an image" has to be the whole string,
+  // because somebody really can search for "an image of a barn owl", and a
+  // notification phrase has to say notification. A filter loose enough to
+  // catch a real question is worse than the noise it removes.
+  const NOT_A_QUERY = [
+    /^an image$/i,
+    /^search(es)?$/i,
+    /^invoked\b/i,
+    /^(received|dismissed|opened|closed|shown)\b.*\bnotification/i,
+    /^(activated|woke|used)\b.*\bassistant/i,
+    /^circle to search/i,
+    /^https?:\/\//i,
+  ];
+  function isRealQuery(text) {
+    return !NOT_A_QUERY.some(pattern => pattern.test(text));
+  }
   function stripLeadingVerb(title) {
     const clean = String(title || '');
-    const match = clean.match(/^\s*\S+(?:\s+\S+)?\s+(?:for\s+)?(.{4,})$/);
-    return match && /^(watched|searched|visited|prompted|used|viewed)\b/i.test(clean)
-      ? match[1].trim()
-      : clean.trim();
+    const match = clean.match(ACTIVITY_VERB);
+    return (match ? match[1] : clean).replace(/\s*https?:\/\/\S+\s*$/i, '').trim();
   }
 
   async function eachJson(files, onFile, report) {
@@ -261,6 +292,20 @@
       const term = queryOf(url, 'q', 'query');
       const clean = trimText(term || stripLeadingVerb(record.title), LIMITS.textChars);
       if (!clean) return;
+      // `productOf` routes Assistant and Discover here alongside Search,
+      // because all three are the same kind of "asking Google something". Most
+      // of what they file is not a question at all: notifications received and
+      // dismissed, Lens invocations, the Assistant being woken. Left in, they
+      // dominate by frequency and take the top of a ranked list — one real
+      // export opened with "an image ×9774", "search ×1269" and "invoked
+      // circle to search ×783" before a single thing the reader had actually
+      // looked for. That is not a small amount of noise; it is the model's
+      // first impression of how this person thinks.
+      //
+      // Filtered on the phrase rather than the product, because the product is
+      // right — an Assistant question is a search. It is the interface events
+      // filed beside it that are not.
+      if (!isRealQuery(clean)) return;
       out.counts.googleSearches++;
       bump(out.googleSearchTerms, clean.toLowerCase());
       keep(out.googleSearches, clean, LIMITS.searchBuffer);
@@ -525,7 +570,13 @@
     return out;
   }
 
+  // Seams for tools/selftest.mjs. Both of these are pure string decisions with
+  // no archive behind them, and both had bugs that were invisible in the
+  // digest — a deleted first word reads as a title that was always like that.
+  const __testing = { stripLeadingVerb, isRealQuery };
+
   root.PsycheSupplement = {
+    __testing,
     readGoogle, readFacebook, LIMITS, SOURCES, SUPPLEMENT_MINIMUM,
     // Exported for the tests, which hold the locale-proofing directly rather
     // than inferring it from a parsed archive.

@@ -526,6 +526,19 @@ export function buildTakeoutZip() {
     products: ['YouTube'],
   }));
 
+  // Interface events, filed by Google under the same products as real
+  // searches, and the top of a frequency-ranked list until they were filtered
+  // out. Deliberately made the most frequent thing in the archive, exactly as
+  // they were in the real export this came from — "an image" appeared 9,774
+  // times there, ahead of anything the reader actually looked for.
+  const assistantNoise = Array.from({ length: 2000 }, (_, i) => ({
+    header: 'Assistant',
+    title: ['Searched for an image', 'Invoked Circle to Search',
+      'Received "time to leave" notification', 'Dismissed an assistant notification'][i % 4],
+    time: at(i % 300, 9),
+    products: ['Assistant'],
+  }));
+
   const searches = Array.from({ length: 1200 }, (_, i) => ({
     header: 'Search',
     title: 'Searched for ' + 'query ' + i,
@@ -586,6 +599,7 @@ export function buildTakeoutZip() {
   const files = [
     { name: 'Takeout/My Activity/YouTube/MyActivity.json', content: JSON.stringify([...watched, ...ytSearches]) },
     { name: 'Takeout/My Activity/Search/MyActivity.json', content: JSON.stringify(searches) },
+    { name: 'Takeout/My Activity/Assistant/MyActivity.json', content: JSON.stringify(assistantNoise) },
     { name: 'Takeout/My Activity/Chrome/MyActivity.json', content: JSON.stringify(chrome) },
     { name: 'Takeout/My Activity/Gemini Apps/MyActivity.json', content: JSON.stringify(gemini) },
     { name: 'Takeout/Meine Aktivitäten/Suche/MeineAktivitäten.json', content: JSON.stringify(localised) },

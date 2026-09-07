@@ -3218,8 +3218,14 @@ try {
   // must actually be numbers, not a placeholder left over from a template.
   check('the review names your own captions and comments, with real counts',
     /\d+ captions?, \d+ comments?/.test(reviewText), reviewText.slice(0, 400));
-  check('the review names the accounts you follow, with a real count',
-    /\d+ followed accounts/.test(reviewText), reviewText.slice(0, 400));
+  // The raw follow list is no longer sent, so the row no longer offers it —
+  // and must not, since a review screen naming something the digest does not
+  // contain is the one failure it cannot have. How many accounts they follow
+  // still goes, as a number, with the other counts.
+  check('the review names the accounts you engage with, with a real count',
+    /\d+ names among who you like/.test(reviewText), reviewText.slice(0, 400));
+  check('and no longer offers a list of follows it does not send',
+    !/followed accounts/.test(reviewText), reviewText.slice(0, 400));
   check('the review names both providers and says nothing else can access the data',
     /Choose which data gets analysed by Gemini or Claude/i.test(reviewText) &&
     /None of this data or the results can be accessed by PsycheAI or others/i.test(reviewText));
@@ -3388,9 +3394,10 @@ try {
   check('the second download leaves the untouched rows exactly as they were',
     preview2.samples.captions.length === preview1.samples.captions.length &&
     preview2.samples.comments.length === preview1.samples.comments.length &&
-    preview2.following.length === preview1.following.length &&
+    preview2.mostLikedAccounts.length === preview1.mostLikedAccounts.length &&
     preview2.samples.searches.length === preview1.samples.searches.length,
-    JSON.stringify({ captions: preview2.samples.captions.length, following: preview2.following.length }));
+    JSON.stringify({ captions: preview2.samples.captions.length,
+      liked: preview2.mostLikedAccounts.length }));
   // Downloading must not itself opt anything out — only Send may. Re-ticked
   // here so the ordinary send a few lines down still exercises the default,
   // everything-included path the checks right after it expect.
@@ -7451,7 +7458,7 @@ try {
       titles: strippedBody.google.videoTitleSample.length }));
   check('unticking Google searches empties both the frequency table and the sample',
     strippedBody.google.topGoogleSearches.length === 0 &&
-    strippedBody.google.googleSearchSample.length === 0);
+    strippedBody.google.topGoogleSearches.length === 0);
   check('unticking Chrome empties the domain histogram',
     strippedBody.google.topDomains.length === 0);
   check('unticking Gemini empties the prompt sample',
@@ -7472,7 +7479,7 @@ try {
     !strippedRaw.includes('Real comment text'));
   // And the Instagram half is untouched by any of it.
   check('unticking every supplement leaves the Instagram evidence alone',
-    strippedBody.samples.captions.length > 0 && strippedBody.following.length > 0 &&
+    strippedBody.samples.captions.length > 0 && strippedBody.mostLikedAccounts.length > 0 &&
     strippedBody.counts !== undefined);
 
   // Comprehensive is no longer reachable from the UI at all: the picker that
@@ -7521,7 +7528,7 @@ try {
   check('unticking activity & timing removes both counts and rhythm entirely',
     optedOut.counts === undefined && optedOut.rhythm === undefined);
   check('unticking accounts empties following and every engagement list',
-    optedOut.following.length === 0 && optedOut.mostLikedAccounts.length === 0 &&
+    optedOut.mostLikedAccounts.length === 0 &&
     optedOut.mostSavedAccounts.length === 0 && optedOut.mostEngagedWith.length === 0);
   check('unticking topics empties both Instagram-inferred lists',
     optedOut.instagramTopics.length === 0 && optedOut.instagramAdInterests.length === 0);
@@ -7537,13 +7544,13 @@ try {
   check('the stripped fields are genuinely absent from the request body, not just from storage',
     optedOutSent.samples.captions.length === 0 && optedOutSent.samples.comments.length === 0 &&
     optedOutSent.counts === undefined && optedOutSent.rhythm === undefined &&
-    optedOutSent.following.length === 0 && optedOutSent.mostLikedAccounts.length === 0 &&
+    optedOutSent.mostLikedAccounts.length === 0 &&
     optedOutSent.mostSavedAccounts.length === 0 && optedOutSent.mostEngagedWith.length === 0 &&
     optedOutSent.instagramTopics.length === 0 && optedOutSent.instagramAdInterests.length === 0 &&
     optedOutSent.samples.searches.length === 0,
     JSON.stringify({
       captions: optedOutSent.samples.captions.length, counts: optedOutSent.counts,
-      following: optedOutSent.following.length, topics: optedOutSent.instagramTopics.length,
+      liked: optedOutSent.mostLikedAccounts.length, topics: optedOutSent.instagramTopics.length,
       searches: optedOutSent.samples.searches.length,
     }));
   // There is no image switch to untick any more, so the three checks that
