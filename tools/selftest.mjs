@@ -2488,7 +2488,7 @@ const google = await Supplement.readGoogle(
 {
   const terms = [...google.googleSearchTerms.keys()];
   const noise = terms.filter(t =>
-    /^an image$|^with an image|^invoked|notification|^google (search|maps)$|^assistant$/i.test(t));
+    /^an image$|^with an image|^invoked|notification|^google (search|maps)$|^assistant$|^\d+ notif/i.test(t));
   check('interface events never become search terms',
     noise.length === 0, noise.slice(0, 4).join(' | '));
   check('and the real searches beside them still do',
@@ -3014,6 +3014,25 @@ check('but the count it was read for still is',
     'google search', 'google maps', 'assistant', 'image search']) {
     check('"' + junk.slice(0, 34) + '" is not counted as a search', real(junk) === false);
   }
+  // The same events phrased as a tally rather than a sentence. Eleven rows and
+  // 371 records in a real export, sitting in the middle of the ranked list
+  // where they are easy to miss — which is where they were, one digest after
+  // the sentence-shaped ones were removed.
+  for (const junk of ['4 notifications', '1 notification', '12 notifications']) {
+    check('"' + junk + '" is a tally, not a search', real(junk) === false);
+  }
+  check('but a question about notifications is still a question',
+    real('4 notifications not showing on android') === true &&
+    real('notification sound ios') === true);
+
+  // A link in the middle of a title, not only at the end. One survived a real
+  // export that way: a Chinese video title with a full watch URL and its
+  // playlist parameters sitting between two halves of the name.
+  check('a URL is removed from the middle of a title, not only off the end',
+    strip('Watched #热点背景 最新节目 https://www.youtube.com/watch?v=abc&list=PLa 重磅：中国') ===
+      '#热点背景 最新节目 重磅：中国',
+    strip('Watched #热点背景 最新节目 https://www.youtube.com/watch?v=abc&list=PLa 重磅：中国'));
+
   // The one this list must never take, and did on its first attempt: a real
   // question that happens to start the same way.
   check('but "an image of a barn owl" is a question and survives',

@@ -180,6 +180,12 @@
     /^assistant$/i,
     /^invoked\b/i,
     /^(received|dismissed|opened|closed|shown)\b.*\bnotification/i,
+    // The same events phrased as a tally rather than a sentence — "4
+    // notifications", "1 notification". Eleven rows and 371 records in a real
+    // export, none of them anything the reader looked for. Exact, digits and
+    // the noun and nothing else, so a question like "4 notifications not
+    // showing on android" is untouched.
+    /^\d+ notifications?$/i,
     /^(activated|woke|used)\b.*\bassistant/i,
     /^circle to search/i,
     /^https?:\/\//i,
@@ -196,7 +202,15 @@
     // later, so nothing is lost by doing it here first.
     const clean = String(title || '').replace(/\s+/g, ' ').trim();
     const match = clean.match(ACTIVITY_VERB);
-    return (match ? match[1] : clean).replace(/\s*https?:\/\/\S+\s*$/i, '').trim();
+    // Anywhere in the line, not only at the end. My Activity appends a link
+    // when it has no title to show, which is what this was written for — but a
+    // title can also carry one mid-string, and one survived a real export that
+    // way: a Chinese video title with a full watch URL and its playlist
+    // parameters sitting between two halves of the name.
+    return (match ? match[1] : clean)
+      .replace(/https?:\/\/\S+/gi, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
   }
 
   async function eachJson(files, onFile, report) {

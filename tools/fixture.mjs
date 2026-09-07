@@ -540,7 +540,8 @@ export function buildTakeoutZip() {
     // carries the corrected forms and a couple of the older ones with it.
     title: ['Searched with an image', 'Used Google Search', 'Invoked Circle to Search',
       'Searched with an image in Arts & Entertainment', 'Used Assistant',
-      'Received "time to leave" notification', 'Dismissed an assistant notification'][i % 7],
+      'Received "time to leave" notification', 'Dismissed an assistant notification',
+      'Used 4 notifications'][i % 8],
     time: at(i % 300, 9),
     products: ['Assistant'],
   }));
