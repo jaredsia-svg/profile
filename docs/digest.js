@@ -18,13 +18,14 @@
   const LIMITS = {
     captions: 560,
     comments: 360,
-    // Messages, and the three buckets they are drawn in — see sampleMessages
-    // for what each one is for and why the old single rule could not see the
-    // middle of somebody's writing at all. The three add up to `messages`.
+    // Messages, drawn in two eras of equal size and each era split in half —
+    // see sampleMessages for why the era split exists and what each half is
+    // for. The two eras add up to `messages`; the two halves add up to an era.
     messages: 300,
     messagesRecent: 150,
+    messagesOlder: 150,
     messagesLongest: 75,
-    messagesMiddle: 75,
+    messagesRandom: 75,
     // The floor a message must clear to take one of those 300 places — see
     // sampleMessages for why this is a quality number and not a size one.
     //
@@ -413,16 +414,25 @@
   // longest, so the old sampler could not see them at all. It saw the last
   // fortnight and the essays.
   //
-  // Three buckets instead:
+  // Two eras, split at eighteen months, each sampled the same way:
   //
-  //   · **150 recent** — spread across the last eighteen months rather than
-  //     taken off the end, so the window is represented instead of the last
-  //     fortnight standing in for it.
-  //   · **75 longest** — where somebody actually says something. An apology,
-  //     an explanation, a plan. These are also the ones the old 240-character
-  //     cap destroyed, cutting them off mid-sentence.
-  //   · **75 mid-length, at random** — the middle of the length distribution,
-  //     which nothing else here would ever reach.
+  //   · **150 from the last eighteen months** — 75 longest, 75 at random.
+  //   · **150 from before that** — 75 longest, 75 at random.
+  //
+  // The symmetry is the point. Under the previous shape — 150 recent, then the
+  // longest of everything, then the mid-length of everything — both of the
+  // non-recent buckets drew from the whole archive at once, so a decade of
+  // older messages competed against eighteen months of newer ones on length
+  // alone. A reader whose long messages happen to sit in one era got an era.
+  // Splitting the quota first means the older half is guaranteed its own
+  // representation, at its own longest and its own ordinary, and how somebody
+  // wrote at 22 can be compared with how they write now.
+  //
+  // Within an era, longest and random are complementary rather than
+  // overlapping: the longest half is taken first and the random half is drawn
+  // from what is left, so "random" lands on the ordinary end without having to
+  // be told to. That is what the old mid-length bucket was reaching for with
+  // an interquartile filter, reached here by construction instead.
   //
   // Fewer messages than before, and deliberately: 300 against the old 1,000.
   // The trade is breadth for depth, and it is worth naming, because a real
@@ -479,36 +489,55 @@
     const chosen = new Set();
     const take = list => { for (const c of list) if (chosen.size < opts.limit) chosen.add(c); };
 
-    // Recent. Anchored to their newest message rather than to the clock, so an
-    // account that went quiet two years ago still fills this bucket with the
-    // last eighteen months *it was used* instead of leaving it empty and
-    // falling back. One rule rather than a rule and an exception.
+    // The era boundary. Anchored to their newest message rather than to the
+    // clock, so an account that went quiet two years ago still has a "recent"
+    // era — the last eighteen months *it was used* — instead of an empty one
+    // and a fallback. One rule rather than a rule and an exception.
     const newest = cleaned[cleaned.length - 1].ts;
     const since = newest - MESSAGE_WINDOW_SECONDS;
-    take(sampleEvenly(cleaned.filter(c => c.ts >= since), opts.recent));
+    const recent = cleaned.filter(c => c.ts >= since);
+    const older = cleaned.filter(c => c.ts < since);
 
-    // Longest of whatever is left.
+    // Each era gets half the places, and an era that cannot fill its half
+    // hands the remainder to the other. Without this a young account — or one
+    // whose whole archive sits inside the window — would come back with 150
+    // messages and 150 unused places, which is a worse sample than the one
+    // rule it was protecting.
+    let recentWant = opts.recent;
+    let olderWant = opts.older;
+    if (recent.length < recentWant) olderWant += recentWant - recent.length;
+    if (older.length < olderWant) recentWant += olderWant - older.length;
+
+    // Longest first, then random from what the longest did not take. The split
+    // is expressed as a ratio of the two constants rather than as the constants
+    // themselves, so that an era working to an enlarged quota still divides its
+    // places the way the configuration says to.
+    const longestShare = opts.longest / (opts.longest + opts.random);
+    const fromEra = (era, want) => {
+      if (!era.length || want <= 0) return;
+      const byLength = era.slice().sort((a, b) => b.len - a.len)
+        .slice(0, Math.min(want, Math.round(want * longestShare)));
+      const picked = new Set(byLength);
+      take(byLength);
+      take(era.filter(c => !picked.has(c))
+        .sort((a, b) => stableHash(a.display) - stableHash(b.display))
+        .slice(0, want - byLength.length));
+    };
+    fromEra(recent, recentWant);
+    fromEra(older, olderWant);
+
     const rest = () => cleaned.filter(c => !chosen.has(c));
-    take(rest().sort((a, b) => b.len - a.len).slice(0, opts.longest));
 
-    // The middle of the length distribution, drawn at random within it. The
-    // interquartile range is measured over everything rather than over what is
-    // left, so "mid-length" means mid-length for this person and not merely
-    // mid-length among the leftovers.
-    const lengths = cleaned.map(c => c.len).sort((a, b) => a - b);
-    const low = lengths[Math.floor(lengths.length * 0.25)];
-    const high = lengths[Math.floor(lengths.length * 0.75)];
-    const middle = rest().filter(c => c.len >= low && c.len <= high);
-    take(middle.slice().sort((a, b) => stableHash(a.display) - stableHash(b.display))
-      .slice(0, opts.middle));
-
-    // Any shortfall — a bucket that had less in it than it asked for — filled
-    // from the most recent of what is left, which is the half a reader would
-    // miss first.
+    // A backstop rather than a rule. The quota handover above should leave
+    // nothing on the table, but rounding and an era that is short in a way the
+    // handover did not anticipate would both land here, and a sample quietly
+    // returning 280 of 300 places is not worth risking to save four lines.
+    // Filled from the most recent of what is left, which is the half a reader
+    // would miss first.
     if (chosen.size < opts.limit) take(rest().reverse());
 
     // One chronological run, the same reason sampleTexts restores order: the
-    // buckets are picked by three different rules and a reader asked to see a
+    // picks come from four separate rules and a reader asked to see a
     // trajectory should not be handed them interleaved.
     return cleaned.filter(c => chosen.has(c)).map(c => c.display);
   }
@@ -802,8 +831,9 @@
           {
             limit: LIMITS.messages,
             recent: LIMITS.messagesRecent,
+            older: LIMITS.messagesOlder,
             longest: LIMITS.messagesLongest,
-            middle: LIMITS.messagesMiddle,
+            random: LIMITS.messagesRandom,
             maxChars: LIMITS.messageMaxChars,
             minChars: LIMITS.messageChars,
           }),

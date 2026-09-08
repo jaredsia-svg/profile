@@ -3151,6 +3151,16 @@ check('but the count it was read for still is',
   // extraversion correction, which is where this guidance used to live.
   check('confidence has a section of its own',
     /## Confidence — score what you were shown/.test(sys));
+  // The message sample is balanced 150/150 across the two eras whatever the
+  // real volumes were, so a model reading equal amounts of 2014 and 2025 would
+  // otherwise be entitled to conclude they wrote equally much in both. The
+  // sampler and this paragraph have to move together or the digest quietly
+  // starts licensing a wrong inference.
+  check('and the prompt describes the era split the sampler actually uses',
+    /half from the last eighteen months and half from before that/.test(sys) &&
+    /half their longest and half drawn at random/.test(sys));
+  check('and warns that an era-balanced sample is not evidence of era-balanced volume',
+    /does \*not\* tell you that they wrote as much then as now/.test(sys));
 
   // The schema field that makes the number checkable, and its renderer. A
   // field generated on every run and shown to nobody is the quiet way this
@@ -3164,22 +3174,22 @@ check('but the count it was read for still is',
     /confidence\.basedOn/.test(readFileSync(join(root, 'docs', 'app.js'), 'utf8')));
 }
 
-// ---------- messages are dated, and sampled in three buckets ----------
+// ---------- messages are dated, and sampled in two eras ----------
 //
 // instagram.js computed a timestamp for every message and put it only into the
 // event tally, so the text arrived at the sampler undated and every rule that
 // depended on a date silently did something else. The dating itself is checked
 // end to end further up, against the real parsed archive; this block is about
-// what the three buckets do with it.
+// what the sampler does with it.
 //
 // The contract, and the reason for each part:
 //
-//   · 150 spread across the last eighteen months, so recent writing is
-//     represented by the window rather than by the last fortnight.
-//   · 75 longest, which is where somebody actually says something.
-//   · 75 mid-length at random, which is the register nothing else here reaches
-//     — the old single rule was bimodal by construction and could not see the
-//     middle of a person's writing at all.
+//   · 150 from the last eighteen months and 150 from before it, so the older
+//     half of an archive is guaranteed its own representation rather than
+//     having to out-compete the newer half on length.
+//   · Each era split 75 longest / 75 at random — the longest is where somebody
+//     actually says something, and the random half lands on the ordinary
+//     register that the longest half has just removed from the pool.
 {
   const DAY = 86400;
   const MONTH18 = 18 * 30 * DAY;
@@ -3215,61 +3225,132 @@ check('but the count it was read for still is',
   const era = line => line.replace(/^\[\d{4}\] /, '').slice(0, 2);
   const kept = { E0: 0, E1: 0, E2: 0 };
   for (const line of sample) kept[era(line)] += 1;
-  // The recent bucket is 150 of 300 and only era 0 lies inside the window, so
-  // it has to be at least that well represented. Position cannot produce this:
-  // era 0 is written first in the list, so a rule reading the tail of the
-  // input would favour era 2.
-  check('the recent bucket fills from inside the eighteen-month window',
-    kept.E0 >= Digest.LIMITS.messagesRecent, JSON.stringify(kept));
-  // And the other two buckets reach past it, or the sample would be recency
-  // with extra steps.
-  check('and the other buckets reach back beyond that window',
-    kept.E1 > 0 && kept.E2 > 0, JSON.stringify(kept));
+  // Only era 0 lies inside the window, so it takes the recent half and nothing
+  // more. Exactly, not at least: under the previous shape the longest and
+  // mid-length buckets drew from the whole archive afterwards and era 0 could
+  // win places there too. Position cannot produce this either — era 0 is
+  // written first in the list, so a rule reading the tail would favour era 2.
+  check('the recent era takes its half of the places and no more',
+    kept.E0 === Digest.LIMITS.messagesRecent, JSON.stringify(kept));
+  check('and the older era takes the other half, spread across the years in it',
+    kept.E1 + kept.E2 === Digest.LIMITS.messagesOlder && kept.E1 > 0 && kept.E2 > 0,
+    JSON.stringify(kept));
 
-  // The longest bucket. The top 75 lengths in the fixture are unambiguous, so
-  // if they are not all here the bucket is not doing its job.
+  // The longest half, measured *within* the recent era rather than across the
+  // archive. The fixture repeats the same 400 lengths in each of its three
+  // eras, so the 75 longest messages overall are spread across all three and a
+  // globally-ranked bucket would give era 0 about a quarter of them. Era 0
+  // keeping its own top 75 is therefore only possible if the ranking happens
+  // inside the era.
   const bodies = sample.map(line => line.replace(/^\[\d{4}\] /, ''));
-  const allLengths = ownTexts.map(m => m.text.length).sort((a, b) => b - a);
-  const cutoff = allLengths[Digest.LIMITS.messagesLongest - 1];
-  const longKept = bodies.filter(b => b.length >= cutoff).length;
-  check('the longest messages are all kept, which is where somebody says something',
-    longKept >= Digest.LIMITS.messagesLongest, longKept + ' of ' + Digest.LIMITS.messagesLongest);
+  const recentLengths = ownTexts.filter(m => m.text.startsWith('E0 '))
+    .map(m => m.text.length).sort((a, b) => b - a);
+  const cutoff = recentLengths[Digest.LIMITS.messagesLongest - 1];
+  const longKept = bodies.filter(b => b.startsWith('E0 ') && b.length >= cutoff).length;
+  check('each era keeps its own longest, not the archive-wide longest',
+    longKept === Digest.LIMITS.messagesLongest,
+    longKept + ' of ' + Digest.LIMITS.messagesLongest);
 
-  // The middle, on a fixture built so that nothing else can reach it.
+  // The two halves of an era, on a fixture where every count is exact.
   //
-  // Checked separately because on an ordinary archive the recent and longest
-  // buckets pick up mid-length messages incidentally — deleting the middle
-  // bucket from the sampler left the count above unchanged, which is a check
-  // that passes because the fixture is kind rather than because the code
-  // works. Here the recent era is deliberately bimodal, all very short or very
-  // long, and every mid-length message sits outside the window and below the
-  // longest cut. Only the middle bucket can produce one.
+  // Built so that no bucket can borrow from another: the recent era holds
+  // exactly 75 long messages and 325 short ones, so the longest half is
+  // precisely the long ones and the random half can only come from the short
+  // ones. If the random half draws from the whole era instead of from what the
+  // longest half left, or if either half goes missing, one of these three
+  // numbers moves.
+  //
+  // The short messages matter more than they look. They are the shortest thing
+  // in the archive and every other rule here would step over them — which is
+  // the point of drawing the second half at random rather than by length.
+  //
+  // Their lengths vary, and that is load-bearing. Written first with every
+  // short message the same length, the counts below could not tell "75 longest
+  // then 75 at random" apart from "150 longest": once the long ones were taken
+  // the rest tied, and a length sort on a tie returns them in the order they
+  // arrived. Setting the split to take all 150 by length changed nothing and
+  // the block passed. With the lengths spread, a draw by length lands in the
+  // top of the range and a draw at random does not, which is what the quartile
+  // checks below actually test.
   {
-    const bimodal = [];
-    for (let i = 0; i < 400; i++) {
-      bimodal.push({
-        text: 'R' + i + ' ' + 'x'.repeat(i % 2 ? 12 : 900),
-        ts: now - i * DAY,
-      });
+    const shaped = [];
+    for (let i = 0; i < 75; i++) {
+      shaped.push({ text: 'BIG' + i + ' ' + 'b'.repeat(800), ts: now - i * DAY });
     }
-    for (let i = 0; i < 800; i++) {
-      bimodal.push({
-        text: 'M' + i + ' ' + 'x'.repeat(300 + (i % 20)),
-        ts: now - (700 + i) * DAY,
-      });
+    for (let i = 0; i < 325; i++) {
+      shaped.push({ text: 'SML' + i + ' ' + 's'.repeat(45 + (i % 60)), ts: now - (75 + i) * DAY });
+    }
+    for (let i = 0; i < 400; i++) {
+      shaped.push({ text: 'OLD' + i + ' ' + 'o'.repeat(150 + (i % 100)), ts: now - (700 + i) * DAY });
     }
     const split = Digest.build({
       ...signals,
       messages: {
-        total: 1200, threads: 3, groupThreads: 0, sent: 1200, received: 0,
-        avgSentLength: 300, ownTexts: bimodal,
+        total: 800, threads: 3, groupThreads: 0, sent: 800, received: 0,
+        avgSentLength: 300, ownTexts: shaped,
       },
     }, { includeMessages: true });
-    const mids = split.directMessages.ownMessageSample
-      .filter(line => /^\[\d{4}\] M\d+ /.test(line)).length;
-    check('the middle of the length distribution is reached by its own bucket',
-      mids >= Digest.LIMITS.messagesMiddle,
-      mids + ' mid-length of ' + Digest.LIMITS.messagesMiddle + ' asked for');
+    const matching = prefix => split.directMessages.ownMessageSample
+      .filter(line => new RegExp('^\\[\\d{4}\\] ' + prefix + '\\d+ ').test(line))
+      .map(line => line.replace(/^\[\d{4}\] /, '').length);
+    const bigs = matching('BIG'), smalls = matching('SML'), olds = matching('OLD');
+    const got = { BIG: bigs.length, SML: smalls.length, OLD: olds.length };
+    check('the longest half of an era is exactly the era\'s longest messages',
+      got.BIG === Digest.LIMITS.messagesLongest, JSON.stringify(got));
+    check('and the random half reaches the ordinary writing the longest half left',
+      got.SML === Digest.LIMITS.messagesRandom, JSON.stringify(got));
+    check('while the older era keeps its own half regardless of how it compares',
+      got.OLD === Digest.LIMITS.messagesOlder, JSON.stringify(got));
+
+    // Drawn at random within the half, not by length a second time. A draw by
+    // length could not reach the bottom quartile of either era at all; a draw
+    // at random reaches it about a quarter of the time, so a single message
+    // from down there is enough to tell the two apart.
+    const bottomQuartile = (all, kept) => {
+      const sorted = all.map(m => m.text.length).sort((a, b) => a - b);
+      const q1 = sorted[Math.floor(sorted.length * 0.25)];
+      return kept.filter(len => len <= q1).length;
+    };
+    check('the random half of the recent era is drawn at random, not by length again',
+      bottomQuartile(shaped.filter(m => m.text.startsWith('SML')), smalls) > 0,
+      smalls.slice().sort((a, b) => a - b).slice(0, 5).join(','));
+    check('and so is the random half of the older era',
+      bottomQuartile(shaped.filter(m => m.text.startsWith('OLD')), olds) > 0,
+      olds.slice().sort((a, b) => a - b).slice(0, 5).join(','));
+  }
+
+  // An archive with nothing outside the window — a new account, or somebody
+  // who only started messaging recently. The older era has no places to give
+  // up and hands its 150 to the recent one, which then works to a quota of 300.
+  //
+  // Counting the sample would not catch a missing handover: the backstop fill
+  // at the end of the sampler tops it back up to 300 either way. What changes
+  // is *which* 300, so the fixture makes length run against time — the oldest
+  // messages in the window are the longest — and asks whether the enlarged
+  // longest half actually reached them. The backstop fills by recency, so
+  // without the handover it returns the short newest ones instead.
+  {
+    const young = [];
+    for (let i = 0; i < 500; i++) {
+      young.push({ text: 'Y' + String(i).padStart(3, '0') + ' ' + 'y'.repeat(60 + i), ts: now - i * DAY });
+    }
+    const built = Digest.build({
+      ...signals,
+      messages: {
+        total: 500, threads: 3, groupThreads: 0, sent: 500, received: 0,
+        avgSentLength: 200, ownTexts: young,
+      },
+    }, { includeMessages: true });
+    const lines = built.directMessages.ownMessageSample;
+    const want = Digest.LIMITS.messagesLongest + Digest.LIMITS.messagesRandom;
+    const lengths = young.map(m => m.text.length).sort((a, b) => b - a);
+    const cutoff = lengths[want - 1];
+    const kept = lines.map(l => l.replace(/^\[\d{4}\] /, ''))
+      .filter(b => b.length >= cutoff).length;
+    check('an archive entirely inside the window still fills all 300 places',
+      lines.length === Digest.LIMITS.messages, String(lines.length));
+    check('and the era that had places to spare gave them to the one that did not',
+      kept === want, kept + ' of the longest ' + want);
   }
 
   // Deterministic, which is not a nicety: the server keys its result cache on
@@ -3776,12 +3857,15 @@ const heavyMessagesSignals = {
   },
 };
 const heavyMessages = Digest.build(heavyMessagesSignals, { includeMessages: true });
-check('the DM cap is 300, drawn in three buckets that add up to it',
+check('the DM cap is 300, split into two eras that add up to it',
   Digest.LIMITS.messages === 300 &&
-  Digest.LIMITS.messagesRecent + Digest.LIMITS.messagesLongest +
-    Digest.LIMITS.messagesMiddle === Digest.LIMITS.messages,
-  JSON.stringify([Digest.LIMITS.messagesRecent, Digest.LIMITS.messagesLongest,
-    Digest.LIMITS.messagesMiddle]));
+  Digest.LIMITS.messagesRecent + Digest.LIMITS.messagesOlder === Digest.LIMITS.messages,
+  JSON.stringify([Digest.LIMITS.messagesRecent, Digest.LIMITS.messagesOlder]));
+check('and each era is split in half, longest and random',
+  Digest.LIMITS.messagesLongest + Digest.LIMITS.messagesRandom ===
+    Digest.LIMITS.messagesRecent &&
+  Digest.LIMITS.messagesLongest === Digest.LIMITS.messagesRandom,
+  JSON.stringify([Digest.LIMITS.messagesLongest, Digest.LIMITS.messagesRandom]));
 check('a heavy account caps DMs at that limit',
   heavyMessages.directMessages.ownMessageSample.length === 300,
   heavyMessages.directMessages.ownMessageSample.length + ' messages');
