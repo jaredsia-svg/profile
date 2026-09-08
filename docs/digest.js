@@ -88,6 +88,19 @@
     // longest bucket still means longest; only the text shown is clipped.
     messageMaxChars: 600,
     likedAuthors: 240,
+    // Captions on the posts they liked — somebody else's words, not theirs.
+    // A hundred, and the most recent hundred rather than a spread: what a
+    // person reaches for now is the interest signal; what they liked in 2014
+    // is an interest they may have dropped, and the *account* half of the
+    // signal is already carried across the whole archive by mostLikedAccounts.
+    // Measured at about 30,000 characters on a real export once the ceiling
+    // below bites, which is paid for twice over by the two cuts beside it.
+    likedCaptions: 100,
+    // Lower than the reader's own captions get, on purpose. A liked caption is
+    // evidence about their taste, not about their voice, and taste is legible
+    // from the first paragraph — where their own writing is the thing being
+    // read closely and deserves the room.
+    likedCaptionChars: 300,
     savedAuthors: 120,
     searches: 160,
     topics: 400,
@@ -109,8 +122,13 @@
     youtubeTitles: 150,
     youtubeSearches: 100,
     googleSearchTerms: 150,
-    chromeDomains: 100,
-    geminiPrompts: 80,
+    // Ten, down from eighty. Measured on a real export, eighty prompts cost
+    // 15,396 characters at a median of 289 — and reading them, most of that
+    // is *pasted payload* rather than anything the reader wrote: a JSON error
+    // dump, somebody else's email, a document to be summarised. The signal is
+    // the instruction on the front ("review this response to my big boss"),
+    // and ten of those carry the register without carrying the attachments.
+    geminiPrompts: 10,
     fbPosts: 200,
     fbComments: 150,
     fbFriends: 300,
@@ -535,6 +553,40 @@
     return out;
   }
 
+  // ---------- captions on the posts they liked ----------
+  //
+  // Other people's words, and the only text in the digest that is. Everything
+  // else sampled here was written by the reader; this was written *at* them and
+  // they chose to keep it, which is a different kind of evidence and has to be
+  // labelled as one — in the field name, in the coverage, and in the prompt.
+  //
+  // The most recent hundred, not a spread across the archive, and that is the
+  // one place this sampler deliberately differs from the two above. Those read
+  // voice, which changes slowly and is worth seeing at several ages. This reads
+  // *interest*, which does not keep: a post somebody liked in 2014 is evidence
+  // of a 2014 interest, and the report already has a fourteen-year view of who
+  // they liked in `mostLikedAccounts` and in the like histogram. What the
+  // sample adds is what they are reaching for now.
+  function sampleLikedCaptions(records) {
+    if (!Array.isArray(records) || !records.length) return [];
+    const cleaned = [];
+    const seen = new Set();
+    for (const item of records) {
+      const full = trim(stripLinks(item && item.text), Infinity);
+      if (full.length < LIMITS.captionChars || seen.has(full)) continue;
+      seen.add(full);
+      const value = full.length > LIMITS.likedCaptionChars
+        ? full.slice(0, LIMITS.likedCaptionChars) + '…' : full;
+      const ts = item && Number.isFinite(item.ts) && item.ts > 0 ? item.ts : 0;
+      const year = yearOf(ts);
+      cleaned.push({ ts, display: (year ? '[' + year + '] ' : '') + value });
+    }
+    cleaned.sort((a, b) => a.ts - b.ts);
+    // Sliced off the newest end and handed back in order, so the block reads
+    // forwards like every other dated list here.
+    return cleaned.slice(-LIMITS.likedCaptions).map(c => c.display);
+  }
+
   // ---------- messages, sampled per conversation ----------
   //
   // How somebody writes to people close to them is mostly visible in ordinary
@@ -901,6 +953,12 @@
           minChars: LIMITS.captionChars,
         }),
         comments: sampleTexts(signals.comments, LIMITS.comments, 240),
+        // Kept out of `captions` and named for what it is. The voice half of
+        // the report is read out of the reader's own writing, and a list that
+        // silently mixed in six hundred captions by other people would put
+        // words in somebody's mouth — the one failure this digest must not
+        // have. The prompt is told the same thing in the same words.
+        likedPostCaptions: sampleLikedCaptions(signals.likedCaptions),
         // Frequency-ranked, not the last N. A plain tail spent its slots on
         // whatever happened to be typed most recently: measured on a realistic
         // history it wasted a quarter of them on the literal string "ok" —
@@ -958,6 +1016,9 @@
     };
 
     digest.coverage.sampling.captions.shown = digest.samples.captions.length;
+    if (digest.coverage.sampling.likedCaptions) {
+      digest.coverage.sampling.likedCaptions.shown = digest.samples.likedPostCaptions.length;
+    }
     digest.coverage.sampling.comments.shown = digest.samples.comments.length;
     digest.coverage.sampling.searches.shown = digest.samples.searches.length;
     // The ranked lists, which are truncated rather than complete — the top N
@@ -974,6 +1035,10 @@
       { shown: digest.mostLikedAccounts.length, available: countOf(signals.likedAuthors) };
     digest.coverage.sampling.savedAccounts =
       { shown: digest.mostSavedAccounts.length, available: countOf(signals.savedAuthors) };
+    digest.coverage.sampling.likedCaptions = {
+      shown: digest.samples.likedPostCaptions.length,
+      available: (signals.likedCaptions || []).length,
+    };
     digest.coverage.sampling.engagedWith =
       { shown: digest.mostEngagedWith.length, available: countOf(signals.commentedOn) };
 
@@ -1268,13 +1333,16 @@
       digest.google = {
         note: 'From a Google Takeout "My Activity" export. Counts are complete; the text is sampled.',
         span: g.span,
-        counts: g.counts,
+        // Spread rather than passed through, so the distinct-domain count can
+        // sit beside the visit count without mutating the supplement object
+        // the caller still holds. It is what survives of topDomains: how many
+        // different sites somebody reaches for is a real fact about them, and
+        // it costs one integer where the list cost 1,075 characters.
+        counts: { ...g.counts, distinctDomains: countOf(g.domains) },
         topChannels: topKeys(g.channels, LIMITS.youtubeChannels),
         videoTitleSample: sampleTexts(g.videoTitles, LIMITS.youtubeTitles, 120),
         topYoutubeSearches: topKeys(g.youtubeSearchTerms, LIMITS.youtubeSearches, 4),
         topGoogleSearches: topKeys(g.googleSearchTerms, LIMITS.googleSearchTerms, 4),
-        // Hostnames, never URLs — the path and query never leave supplement.js.
-        topDomains: topKeys(g.domains, LIMITS.chromeDomains),
         geminiPromptSample: sampleTexts(g.geminiPrompts, LIMITS.geminiPrompts, 300),
       };
       digest.coverage.sampling.youtubeTitles = {
@@ -1292,9 +1360,6 @@
       };
       digest.coverage.sampling.youtubeChannels = {
         shown: digest.google.topChannels.length, available: countOf(g.channels),
-      };
-      digest.coverage.sampling.browsedDomains = {
-        shown: digest.google.topDomains.length, available: countOf(g.domains),
       };
       digest.coverage.sampling.geminiPrompts = {
         shown: digest.google.geminiPromptSample.length, available: g.counts.prompts,
@@ -1381,6 +1446,12 @@
       ['ownMessages', () => digest.directMessages && digest.directMessages.ownMessageSample,
         v => { digest.directMessages.ownMessageSample = v; }],
       ['captions', () => digest.samples.captions, v => { digest.samples.captions = v; }],
+      // Trimmed before the reader's own captions and comments would be, by
+      // sitting in the same table: the loop shrinks whichever list is largest,
+      // and on an account where this one is, other people's words are the
+      // right thing to lose first.
+      ['likedPostCaptions', () => digest.samples.likedPostCaptions,
+        v => { digest.samples.likedPostCaptions = v; }],
       ['comments', () => digest.samples.comments, v => { digest.samples.comments = v; }],
       ['searches', () => digest.samples.searches, v => { digest.samples.searches = v; }],
       ['mostLikedAccounts', () => digest.mostLikedAccounts, v => { digest.mostLikedAccounts = v; }],
@@ -1399,7 +1470,6 @@
       ['topGoogleSearches', () => digest.google && digest.google.topGoogleSearches, v => { digest.google.topGoogleSearches = v; }],
       ['topYoutubeSearches', () => digest.google && digest.google.topYoutubeSearches, v => { digest.google.topYoutubeSearches = v; }],
       ['topChannels', () => digest.google && digest.google.topChannels, v => { digest.google.topChannels = v; }],
-      ['topDomains', () => digest.google && digest.google.topDomains, v => { digest.google.topDomains = v; }],
       ['geminiPromptSample', () => digest.google && digest.google.geminiPromptSample, v => { digest.google.geminiPromptSample = v; }],
       ['postSample', () => digest.facebook && digest.facebook.postSample, v => { digest.facebook.postSample = v; }],
       ['commentSample', () => digest.facebook && digest.facebook.commentSample, v => { digest.facebook.commentSample = v; }],
@@ -1444,6 +1514,9 @@
     }
 
     digest.coverage.sampling.captions.shown = digest.samples.captions.length;
+    if (digest.coverage.sampling.likedCaptions) {
+      digest.coverage.sampling.likedCaptions.shown = digest.samples.likedPostCaptions.length;
+    }
     digest.coverage.sampling.comments.shown = digest.samples.comments.length;
     digest.coverage.sampling.searches.shown = digest.samples.searches.length;
     // Refreshed like the three above, now that this list is trimmable: a
@@ -1553,9 +1626,30 @@
     return digest;
   }
 
+  // Browsing contributes two numbers now and no list. `topDomains` was 25
+  // rows and 1,075 characters of a real digest, and the rows were
+  // "google.com" 18,255 times, "accounts.google.com" 58 and "mail.google.com"
+  // 13 — a Chrome export that only records Google's own properties, saying
+  // nothing except that the reader uses Google. The counts survive because
+  // how much somebody browses and across how many distinct sites are real
+  // facts that cost two integers; the list was neither.
   function omitChrome(digest) {
-    if (!digest.google) return digest;
-    digest.google.topDomains = [];
+    if (!digest.google || !digest.google.counts) return digest;
+    delete digest.google.counts.visits;
+    delete digest.google.counts.distinctDomains;
+    return digest;
+  }
+
+  function omitLikedCaptions(digest) {
+    if (!digest.samples) return digest;
+    digest.samples.likedPostCaptions = [];
+    // Zeroed rather than deleted, the same way omitCaptionsAndComments does
+    // it: the reader declining to send something is not the same fact as the
+    // export never having had it, and the confidence guidance reads both.
+    if (digest.coverage && digest.coverage.sampling &&
+        digest.coverage.sampling.likedCaptions) {
+      digest.coverage.sampling.likedCaptions.shown = 0;
+    }
     return digest;
   }
 
@@ -1591,7 +1685,8 @@
   root.PsycheDigest = {
     build, addSupplements,
     LIMITS, charBudget, COST_CAP, FIXED_INPUT_TOKENS, MAX_OUTPUT_TOKENS, PRICING, PRICED_MODEL,
-    omitMessages, omitCaptionsAndComments, omitActivity, omitAccounts, omitTopics, omitSearches,
+    omitMessages, omitCaptionsAndComments, omitLikedCaptions, omitActivity, omitAccounts,
+    omitTopics, omitSearches,
     omitYouTube, omitYouTubeSearches, omitGoogleSearches, omitChrome, omitGeminiPrompts,
     omitFacebookPosts, omitFacebookConnections, omitFacebookMessages,
   };

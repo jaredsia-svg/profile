@@ -2900,6 +2900,20 @@ check('and is not also poured into the caption pool',
 // sampled line came back [story], so it was 2,700 characters restating one
 // fact. This is the check that fails if one is reintroduced without the
 // measurement that would justify it.
+// End to end through the real archive, because every check in the liked-caption
+// block builds `signals.likedCaptions` by hand and so passes with the parser's
+// half deleted — which is the third time that exact gap has appeared in this
+// file. The fixture's newer-shape liked posts carry captions; these are them.
+{
+  const liked = digest.samples.likedPostCaptions;
+  check('a caption on a liked post reaches the digest from a real archive',
+    liked.length === 60, liked.length + ' liked captions');
+  check('and carries the year it was liked, off the export rather than invented',
+    liked.every(c => /^\[2014\] A caption on somebody else/.test(c)), liked[0]);
+  check('and its text is nowhere in the reader\'s own captions',
+    !digest.samples.captions.some(c => /somebody else's post/.test(c)));
+}
+
 check('a caption carries its year and no other tag',
   digest.samples.captions.every(c => /^\[\d{4}\] [^[]/.test(c)),
   digest.samples.captions.find(c => !/^\[\d{4}\] [^[]/.test(c)));
@@ -3079,6 +3093,77 @@ check('the sample arrives in chronological order',
     ' (raw ratio would be ' + volumeRatio.toFixed(1) + ')');
   check('and not its volume advantage itself',
     shareRatio < volumeRatio / 2, shareRatio.toFixed(2) + ' vs ' + volumeRatio.toFixed(1));
+}
+
+// ---------- captions on posts they liked ----------
+//
+// The only text in the digest somebody else wrote. It is held apart from the
+// reader's own captions permanently and by name, because the voice half of the
+// report is read out of that list and six hundred captions by other people
+// poured into it would put words in somebody's mouth.
+//
+// The most recent hundred, deliberately not a spread. The two samplers above
+// read voice, which changes slowly and is worth seeing at several ages; this
+// reads interest, which does not keep. A post liked in 2014 is evidence of a
+// 2014 interest, and the fourteen-year view of *who* they liked is already
+// carried by mostLikedAccounts and the like histogram.
+{
+  const DAY = 86400;
+  const base = Date.UTC(2014, 0, 1) / 1000;
+  const likedCaptions = [];
+  for (let i = 0; i < 400; i++) {
+    likedCaptions.push({
+      text: 'L' + String(i).padStart(3, '0') + ' a caption somebody else wrote on a post that was liked',
+      ts: base + i * 10 * DAY,
+    });
+  }
+  const built = Digest.build({ ...signals, likedCaptions }, { includeMessages: false });
+  const got = built.samples.likedPostCaptions;
+  const idx = got.map(line => Number(/L(\d+) /.exec(line)[1]));
+
+  // Pinned to the number as well as to the constant, because every check in
+  // this block reads the constant to build its expectation and so passes at
+  // any value — moving the limit to 250 changed nothing here on the first
+  // run. A hundred is a size decision measured against a real export: the
+  // most recent hundred came to about 30,000 characters once the ceiling bit.
+  check('a hundred liked captions, and a 300-character ceiling on each',
+    Digest.LIMITS.likedCaptions === 100 && Digest.LIMITS.likedCaptionChars === 300,
+    JSON.stringify([Digest.LIMITS.likedCaptions, Digest.LIMITS.likedCaptionChars]));
+  check('the liked captions are sampled to their own limit',
+    got.length === Digest.LIMITS.likedCaptions, String(got.length));
+  // The discriminating part: the *most recent* hundred, not the first hundred
+  // and not a hundred spread across the twelve years the fixture covers. Both
+  // of those would return a hundred lines and look identical in a count.
+  check('and they are the most recent hundred rather than any hundred',
+    Math.min(...idx) === 400 - Digest.LIMITS.likedCaptions && Math.max(...idx) === 399,
+    'oldest kept ' + Math.min(...idx) + ', newest ' + Math.max(...idx));
+  check('handed over oldest first, like every other dated list here',
+    idx.every((n, i) => i === 0 || n > idx[i - 1]), JSON.stringify(idx.slice(0, 4)));
+  check('each carries the year it was liked',
+    got.every(line => /^\[\d{4}\] /.test(line)), got[0]);
+  check('coverage says how many of how many',
+    built.coverage.sampling.likedCaptions.shown === got.length &&
+    built.coverage.sampling.likedCaptions.available === 400,
+    JSON.stringify(built.coverage.sampling.likedCaptions));
+
+  // Never merged into the reader's own captions. This is the check that would
+  // catch the worst version of this feature: a report that quotes a stranger's
+  // caption back to somebody as evidence of how *they* write.
+  check('and not one of them is in the reader\'s own caption sample',
+    !built.samples.captions.some(c => /a caption somebody else wrote/.test(c)),
+    JSON.stringify(built.samples.captions.filter(c => /somebody else wrote/.test(c)).slice(0, 2)));
+
+  // Its own switch on the review screen, for the same reason.
+  const declined = Digest.omitLikedCaptions(
+    Digest.build({ ...signals, likedCaptions }, { includeMessages: false }));
+  check('declining them empties the list and says so in the coverage',
+    declined.samples.likedPostCaptions.length === 0 &&
+    declined.coverage.sampling.likedCaptions.shown === 0 &&
+    declined.coverage.sampling.likedCaptions.available === 400,
+    JSON.stringify(declined.coverage.sampling.likedCaptions));
+  check('and leaves the reader\'s own captions alone',
+    declined.samples.captions.length === digest.samples.captions.length,
+    declined.samples.captions.length + ' vs ' + digest.samples.captions.length);
 }
 
 // ---------- captions: the two halves inside one year ----------
@@ -3323,7 +3408,7 @@ check('the sample arrives in chronological order',
   // Every ranked list the model is shown needs a denominator, or it cannot
   // tell the head of a long tail from the whole of a short one.
   for (const key of ['topics', 'likedAccounts', 'savedAccounts', 'engagedWith',
-    'googleSearchTerms', 'youtubeSearchTerms', 'youtubeChannels', 'browsedDomains']) {
+    'googleSearchTerms', 'youtubeSearchTerms', 'youtubeChannels', 'likedCaptions']) {
     check('coverage names what was shown of ' + key,
       sampling[key] && Number.isFinite(sampling[key].shown) &&
       Number.isFinite(sampling[key].available) &&
@@ -3404,6 +3489,17 @@ check('the sample arrives in chronological order',
       .every(c => /^\[\d{4}\] [^[]/.test(c)));
   check('and warns that a flattened sample is not evidence of flat posting',
     /not evidence they posted similarly in both/.test(sys));
+  // The one list in the digest somebody else wrote. Quoting a stranger's
+  // caption back to a reader as their own words is the worst thing this
+  // feature could do, so the prohibition is pinned rather than left to the
+  // field name to imply.
+  check('the prompt says the liked captions were written by other people',
+    /written by other people/.test(sys) &&
+    /captions on posts the reader liked — their taste, not their voice/.test(sys));
+  check('and forbids reading their voice out of somebody else\'s words',
+    /Never quote one back as something they wrote/.test(sys));
+  check('and no longer names a browsing list the digest stopped sending',
+    !/`topDomains`/.test(sys));
 
   // The schema field that makes the number checkable, and its renderer. A
   // field generated on every run and shown to nobody is the quiet way this
@@ -4049,9 +4145,15 @@ const shortNameDigest = Digest.build({ ...signals, supplements: { google: {
 check('short channel names survive, because the floor is for terms not names',
   shortNameDigest.google.topChannels.map(c => c.name).join(',') === 'NPR,A24,Some Longer Channel',
   JSON.stringify(shortNameDigest.google.topChannels.map(c => c.name)));
-check('short domain names survive too',
-  shortNameDigest.google.topDomains.map(d => d.name).join(',') === 'x.com,bbc.co.uk',
-  JSON.stringify(shortNameDigest.google.topDomains.map(d => d.name)));
+// Domains are no longer sent as a list — see omitChrome for the measurement
+// that ended it — so what survives of them is the count of distinct hosts.
+// The floor check above still stands for channels, which is where the floor
+// mattered: NPR and A24 are real channels and a four-character minimum would
+// have dropped both.
+check('browsing contributes a distinct-host count rather than a list of hosts',
+  shortNameDigest.google.topDomains === undefined &&
+  shortNameDigest.google.counts.distinctDomains === 2,
+  JSON.stringify(shortNameDigest.google.counts));
 
 // The same floor now applies to the supplements' own search histograms, which
 // had the identical hole — a Google export's top term came back as "ok".
@@ -4175,6 +4277,12 @@ const heavyMessagesSignals = {
   },
 };
 const heavyMessages = Digest.build(heavyMessagesSignals, { includeMessages: true });
+// Ten, down from eighty, and pinned because the sample size is the whole
+// change: on a real export eighty prompts cost 15,396 characters at a median
+// of 289, and most of that was pasted payload — a JSON error dump, somebody
+// else's email — rather than anything the reader wrote.
+check('the Gemini prompt sample is ten, not eighty',
+  Digest.LIMITS.geminiPrompts === 10, String(Digest.LIMITS.geminiPrompts));
 check('the DM cap is 300, drawn from the ten conversations they write in most',
   Digest.LIMITS.messages === 300 && Digest.LIMITS.messageTopThreads === 10,
   JSON.stringify([Digest.LIMITS.messages, Digest.LIMITS.messageTopThreads]));
@@ -4230,10 +4338,10 @@ check('1,240 searches become a frequency table capped at the limit',
   withBoth.google.topGoogleSearches.length === Digest.LIMITS.googleSearchTerms &&
   withBoth.google.topGoogleSearches[0].count === 300,
   withBoth.google.topGoogleSearches.length + ' terms');
-check('800 browsing records reach the model as four hostnames',
-  withBoth.google.topDomains.length === 4 &&
-  withBoth.google.topDomains.every(d => !/[/?#]/.test(d.name)),
-  JSON.stringify(withBoth.google.topDomains.map(d => d.name)));
+check('800 browsing records reach the model as two numbers, not a list of hosts',
+  withBoth.google.topDomains === undefined &&
+  withBoth.google.counts.distinctDomains === 4 && withBoth.google.counts.visits === 800,
+  JSON.stringify(withBoth.google.counts));
 check('no browsing path or query string is anywhere in the finished digest',
   !JSON.stringify(withBoth).includes('utm_source') &&
   !JSON.stringify(withBoth).includes('deep/path'));
@@ -4305,7 +4413,7 @@ check('the trim loop really did fire, or the checks below prove nothing',
 check('every supplement list is trimmed to its floor before Instagram is touched',
   [crowded.google.videoTitleSample, crowded.google.topGoogleSearches,
     crowded.google.topGoogleSearches, crowded.google.topChannels,
-    crowded.google.topDomains, crowded.google.geminiPromptSample]
+    crowded.google.geminiPromptSample]
     .every(list => list.length <= 10),
   JSON.stringify({ titles: crowded.google.videoTitleSample.length,
     searches: crowded.google.topGoogleSearches.length,
@@ -4339,7 +4447,8 @@ const omitCases = [
   ['omitYouTube', d => d.google.topChannels.length === 0 && d.google.videoTitleSample.length === 0],
   ['omitYouTubeSearches', d => d.google.topYoutubeSearches.length === 0],
   ['omitGoogleSearches', d => d.google.topGoogleSearches.length === 0],
-  ['omitChrome', d => d.google.topDomains.length === 0],
+  ['omitChrome', d => d.google.counts.visits === undefined &&
+    d.google.counts.distinctDomains === undefined],
   ['omitGeminiPrompts', d => d.google.geminiPromptSample.length === 0],
   ['omitFacebookPosts', d => d.facebook.postSample.length === 0 && d.facebook.commentSample.length === 0],
   ['omitFacebookConnections', d => d.facebook.friends.length === 0],

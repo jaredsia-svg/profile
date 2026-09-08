@@ -2345,6 +2345,7 @@
   // actually goes out once they press Send.
   function applyReviewDecision(target, decision) {
     if (!decision.includeCaptions) Digest.omitCaptionsAndComments(target);
+    if (!decision.includeLikedCaptions) Digest.omitLikedCaptions(target);
     if (!decision.includeActivity) Digest.omitActivity(target);
     if (!decision.includeAccounts) Digest.omitAccounts(target);
     if (!decision.includeTopics) Digest.omitTopics(target);
@@ -2440,6 +2441,7 @@
       digest.mostEngagedWith.length;
     const topicsCount = digest.instagramTopics.length + digest.instagramAdInterests.length;
     const searchesCount = digest.samples.searches.length;
+    const likedCaptionsCount = (digest.samples.likedPostCaptions || []).length;
 
     // One row per checkbox — id, how many there are to send, the on/off
     // label, and the detail line. The single source both the checklist below
@@ -2460,6 +2462,18 @@
       // timing where the other counts live. Naming follows here would be
       // promising to send something the digest does not contain, which is the
       // one thing a review screen must never do.
+      // Its own row, and it has to be. Every other Instagram row offers the
+      // reader's own words or their own numbers; this one offers text somebody
+      // else wrote, on posts they liked. Folding it under "Accounts you engage
+      // with" would send text under a heading that promises names — the
+      // mirror image of the mistake the note below warns about, and the worse
+      // direction to make it in.
+      ['review-liked-captions', 'includeLikedCaptions', likedCaptionsCount,
+        'Captions on posts you liked', 'Captions on posts you liked — none found',
+        likedCaptionsCount ? likedCaptionsCount + ' captions from the posts you liked most ' +
+          'recently — written by other people, kept because what you reach for says ' +
+          'something about you.' :
+          'This export did not include captions on the posts you liked.'],
       ['review-accounts', 'includeAccounts', engagedCount,
         'Accounts you engage with', 'Accounts you engage with — none found',
         engagedCount + ' names among who you like, save and comment on most.'],
@@ -2487,7 +2501,7 @@
       const watched = g.counts.watched;
       const ytSearches = g.topYoutubeSearches.length;
       const gSearches = g.counts.googleSearches;
-      const domains = g.topDomains.length;
+      const visits = g.counts.visits || 0;
       const prompts = g.geminiPromptSample.length;
       rows.push(
         ['review-yt-watched', 'includeYouTube', watched,
@@ -2504,10 +2518,14 @@
           gSearches ? g.topGoogleSearches.length + ' of your most repeated searches out of ' +
             gSearches + ', plus a sample of others.' :
             'No Google searches were found in this export.'],
-        ['review-chrome', 'includeChrome', domains,
+        // The list of site names is gone — on a real export it was
+        // "google.com" 18,255 times and almost nothing else — so what this row
+        // now offers is two numbers. Still its own switch, because a count of
+        // how much somebody browses is still something to be asked about.
+        ['review-chrome', 'includeChrome', visits,
           'Chrome browsing history', 'Chrome browsing history — none found',
-          domains ? domains + ' website names you visit most, out of ' + g.counts.visits +
-            ' visits. Only the site name — never the page, the address or when.' :
+          visits ? visits + ' visits across ' + (g.counts.distinctDomains || 0) +
+            ' different sites, as two numbers. No site name, page, address or time.' :
             'No browsing history was found in this export.'],
         ['review-gemini', 'includeGeminiPrompts', prompts,
           'Gemini Apps prompts', 'Gemini Apps prompts — none found',

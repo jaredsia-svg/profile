@@ -3271,11 +3271,16 @@ try {
   // are checkboxes now, so this holds the count directly rather than trusting
   // one row checked below to stand in for the rest.
   //
-  // Six, not seven: Photos was the seventh and is gone with the payload it
-  // described. This is the count that keeps the supplementary rows honest —
-  // they append to these, so a drift here would silently move that goalpost.
-  check('all six review rows are checkboxes, each checked by default',
-    (await page.locator('#review-list input[type="checkbox"]').count()) === 6 &&
+  // Seven. Six for a while — Photos was an older seventh and went with the
+  // payload it described — and seven again now that captions on liked posts
+  // are offered separately. That row exists rather than folding into
+  // "Accounts you engage with" because it is the one Instagram row carrying
+  // text somebody else wrote, and a review screen must not send text under a
+  // heading that promises names. This is the count that keeps the
+  // supplementary rows honest: they append to these, so a drift here would
+  // silently move that goalpost.
+  check('all seven review rows are checkboxes, each checked by default',
+    (await page.locator('#review-list input[type="checkbox"]').count()) === 7 &&
     (await page.evaluate(() =>
       [...document.querySelectorAll('#review-list input[type="checkbox"]')].every(el => el.checked))));
   check('the icon column is gone — nothing in the list is decorative any more',
@@ -3349,8 +3354,8 @@ try {
   check('the file opens on its own — a real, self-contained HTML document',
     html1.startsWith('<!doctype html>') && !/https?:\/\//.test(html1),
     html1.slice(0, 40));
-  check('the readable table says all six rows are included, by default',
-    (html1.match(/>Included</g) || []).length === 6 && (html1.match(/>Excluded</g) || []).length === 0,
+  check('the readable table says all seven rows are included, by default',
+    (html1.match(/>Included</g) || []).length === 7 && (html1.match(/>Excluded</g) || []).length === 0,
     JSON.stringify({ included: (html1.match(/>Included</g) || []).length,
       excluded: (html1.match(/>Excluded</g) || []).length }));
   const preview1 = extractDigestFromPreviewHtml(html1);
@@ -7400,10 +7405,10 @@ try {
   await page.waitForSelector('#review-dialog[open]', { timeout: 30000 });
 
   // Eight more rows, and only because both sources were added — a reader who
-  // skipped still sees the original six, which is asserted on the very first
+  // skipped still sees the original seven, which is asserted on the very first
   // upload further up and is what keeps that count meaningful.
   check('adding both sources adds eight rows to the review, not a lumped-together one',
-    (await page.locator('#review-list input[type="checkbox"]').count()) === 14,
+    (await page.locator('#review-list input[type="checkbox"]').count()) === 15,
     (await page.locator('#review-list input[type="checkbox"]').count()) + ' rows');
   const supplementedReview = await page.locator('#review-dialog').innerText();
   for (const label of ['YouTube watch history', 'YouTube searches', 'Google searches',
@@ -7416,8 +7421,8 @@ try {
     await page.evaluate(() => [...document.querySelectorAll('#review-list input[type="checkbox"]')]
       .every(el => el.checked)));
   // The two most sensitive rows in the app say plainly what they contain.
-  check('the Chrome row promises site names only, never pages or addresses',
-    /Only the site name — never the page, the address or when/.test(supplementedReview));
+  check('the Chrome row promises two numbers and no site name at all',
+    /as two numbers\. No site name, page, address or time/.test(supplementedReview));
   check('the Messenger row repeats the own-side-only rule',
     /Only your side of any conversation is ever included[\s\S]*Facebook Messenger|Facebook Messenger[\s\S]*Only your side/.test(supplementedReview));
   await shot('1c-review-supplemented');
@@ -7432,11 +7437,12 @@ try {
   check('the watch history arrives as a channel histogram, not a list of titles',
     bothBody.google.topChannels.length === 8 && bothBody.google.counts.watched === 940,
     bothBody.google.topChannels.length + ' channels from ' + bothBody.google.counts.watched);
-  check('the browsing history arrives as hostnames, with no path or query anywhere',
-    bothBody.google.topDomains.length === 4 &&
+  check('the browsing history arrives as counts only, with no host, path or query',
+    bothBody.google.topDomains === undefined &&
+    bothBody.google.counts.distinctDomains === 4 &&
     !JSON.stringify(bothBody).includes('utm_source') &&
     !JSON.stringify(bothBody).includes('deep/path'),
-    JSON.stringify(bothBody.google.topDomains.map(d => d.name)));
+    JSON.stringify(bothBody.google.counts));
   check('only the reader\'s own Facebook messages are in the request body',
     bothBody.facebook.ownMessageSample.length > 0 &&
     !JSON.stringify(bothBody.facebook).includes('Sarah'));
@@ -7472,8 +7478,10 @@ try {
   check('unticking Google searches empties both the frequency table and the sample',
     strippedBody.google.topGoogleSearches.length === 0 &&
     strippedBody.google.topGoogleSearches.length === 0);
-  check('unticking Chrome empties the domain histogram',
-    strippedBody.google.topDomains.length === 0);
+  check('unticking Chrome removes the browsing counts, the only browsing left',
+    strippedBody.google.counts.visits === undefined &&
+    strippedBody.google.counts.distinctDomains === undefined,
+    JSON.stringify(strippedBody.google.counts));
   check('unticking Gemini empties the prompt sample',
     strippedBody.google.geminiPromptSample.length === 0);
   check('unticking the Facebook rows empties posts, comments, friends and messages',

@@ -195,6 +195,7 @@
     messageThreads: 500,
     corpusChars: 4000000,
     followRows: 20000,
+    likedCaptionRows: 5000,
     likeRows: 40000,
     mediaRefs: 20000,
   };
@@ -312,6 +313,7 @@
       for (const item of asArray(data, 'likes_media_likes')) {
         if (out.counts.likes >= LIMITS.likeRows) break;
         const entry = listEntry(item);
+        const labels = labelMap(item);
         pushEvent(out, 'like', entry.timestamp);
         out.counts.likes++;
         // `entry.owner` is the newer shape's answer; `item.title` the older
@@ -321,6 +323,20 @@
         // somebody than the follow count is.
         const author = fixText(item.title || '') || entry.owner;
         if (author) out.likedAuthors.set(author, (out.likedAuthors.get(author) || 0) + 1);
+        // The caption of the post they liked — somebody else's words, kept
+        // because *what* they reach for is a different signal from *whose*
+        // account it was, and the account name alone cannot carry it. Only the
+        // newer export shape has it; the older one never included captions.
+        //
+        // Held apart from `out.captions` deliberately and permanently. That
+        // list is the reader's own writing and the whole voice half of the
+        // report is read out of it; mixing in six hundred captions written by
+        // other people would put words in somebody's mouth, which is the worst
+        // failure this file could have.
+        const liked = labels ? labels.Caption : '';
+        if (liked && out.likedCaptions.length < LIMITS.likedCaptionRows) {
+          out.likedCaptions.push({ text: liked, ts: entry.timestamp || 0 });
+        }
       }
     },
     likedComments(out, data) {
@@ -492,6 +508,7 @@
       adInterests: [],
       following: [],
       likedAuthors: new Map(),
+      likedCaptions: [],
       savedAuthors: new Map(),
       commentedOn: new Map(),
       threadPartners: new Map(),
