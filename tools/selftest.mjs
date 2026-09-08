@@ -3151,16 +3151,21 @@ check('but the count it was read for still is',
   // extraversion correction, which is where this guidance used to live.
   check('confidence has a section of its own',
     /## Confidence — score what you were shown/.test(sys));
-  // The message sample is balanced 150/150 across the two eras whatever the
-  // real volumes were, so a model reading equal amounts of 2014 and 2025 would
-  // otherwise be entitled to conclude they wrote equally much in both. The
-  // sampler and this paragraph have to move together or the digest quietly
-  // starts licensing a wrong inference.
-  check('and the prompt describes the era split the sampler actually uses',
-    /half from the last eighteen months and half from before that/.test(sys) &&
-    /half their longest and half drawn at random/.test(sys));
-  check('and warns that an era-balanced sample is not evidence of era-balanced volume',
-    /does \*not\* tell you that they wrote as much then as now/.test(sys));
+  // The sampler and this paragraph have to move together, or the digest
+  // quietly starts licensing inferences its own shape rules out. Both cautions
+  // are pinned, not just the description: the cap makes the proportions
+  // between tags smaller than life, and the top-ten rule means the sample is
+  // silent about everyone outside it.
+  check('and the prompt describes the per-conversation sampling actually used',
+    /the ten conversations the user writes in most/.test(sys) &&
+    /no conversation exceeding a fifth of the sample/.test(sys) &&
+    /half the most recent and half the longest/.test(sys));
+  check('and tells the model the tags are a finding rather than noise',
+    /How somebody writes to one person versus another is a finding/.test(sys));
+  check('and warns that the cap understates how large one conversation is',
+    /do not read the proportions as a measure of how close anyone is/.test(sys));
+  check('and that a ten-conversation sample is not a measure of reach',
+    /for reach, read `activeThreads` and `threads`, never the tag count/.test(sys));
 
   // The schema field that makes the number checkable, and its renderer. A
   // field generated on every run and shown to nobody is the quiet way this
@@ -3174,184 +3179,137 @@ check('but the count it was read for still is',
     /confidence\.basedOn/.test(readFileSync(join(root, 'docs', 'app.js'), 'utf8')));
 }
 
-// ---------- messages are dated, and sampled in two eras ----------
+// ---------- messages are dated, threaded, and sampled per conversation ------
 //
 // instagram.js computed a timestamp for every message and put it only into the
-// event tally, so the text arrived at the sampler undated and every rule that
-// depended on a date silently did something else. The dating itself is checked
-// end to end further up, against the real parsed archive; this block is about
-// what the sampler does with it.
+// event tally, so the text arrived at the sampler undated. It did the same
+// thing with the conversation: `messages()` knows exactly which thread it is
+// reading and dropped that on the floor, so the sampler saw one flat pile of
+// text and could not tell forty relationships apart. Both are carried now.
 //
 // The contract, and the reason for each part:
 //
-//   · 150 from the last eighteen months and 150 from before it, so the older
-//     half of an archive is guaranteed its own representation rather than
-//     having to out-compete the newer half on length.
-//   · Each era split 75 longest / 75 at random — the longest is where somebody
-//     actually says something, and the random half lands on the ordinary
-//     register that the longest half has just removed from the pool.
+//   · Only the ten conversations they write in most. Below that is the one-off
+//     end of an inbox, which is real text and no evidence about a relationship.
+//   · Places shared out in proportion to volume, so the sample resembles their
+//     actual social life, and capped at a fifth each, so one relationship
+//     cannot become the whole report.
+//   · Inside a conversation, half the most recent and half the longest of what
+//     is left — where it is now, and where they said something in it.
+//   · Every line tagged [t1]..[t10] by rank. The tag names nobody; it exists so
+//     that how somebody writes to one person can be told apart from how they
+//     write to another, which a pooled sample cannot show at all.
 {
   const DAY = 86400;
-  const MONTH18 = 18 * 30 * DAY;
   const now = Math.floor(Date.parse('2026-06-01T00:00:00Z') / 1000);
+  // Twenty conversations. Ten worth sampling, on a long tail of sizes so that
+  // proportional allocation has something to be proportional to, and ten more
+  // of five messages each — the one-off end that must not appear at all.
+  const SIZES = [500, 200, 150, 100, 80, 70, 60, 50, 40, 30];
+  const TAIL = 10;
   const ownTexts = [];
-  // Three eras, each 400 messages: inside the window, just outside it, and
-  // long ago. Lengths vary independently of era, so "longest" cannot stand in
-  // for "oldest" and each bucket has to earn its own picks.
-  const eras = [0, 600, 1400];
-  for (let era = 0; era < eras.length; era++) {
-    for (let i = 0; i < 400; i++) {
-      const width = 20 + ((i * 37) % 400);
+  // Age runs *against* volume: the largest conversation is the newest and the
+  // smallest is a decade old. Written the other way round first, with every
+  // thread sharing one timeline, the two orders coincided — and ranking the
+  // threads by age instead of by volume passed the whole block. Nothing here
+  // may be derivable from anything but the message count.
+  SIZES.forEach((size, k) => {
+    for (let i = 0; i < size; i++) {
       ownTexts.push({
-        text: 'E' + era + ' message ' + String(i).padStart(3, '0') + ' ' + 'x'.repeat(width),
-        ts: now - (eras[era] + i) * DAY,
+        text: 'T' + k + ' M' + i + ' ' + 'x'.repeat(40),
+        ts: now - (i * 3600) - (k * 400 * DAY),
+        thread: k,
+      });
+    }
+  });
+  for (let k = 0; k < TAIL; k++) {
+    for (let i = 0; i < 5; i++) {
+      ownTexts.push({
+        text: 'TAIL' + k + ' M' + i + ' ' + 'y'.repeat(40),
+        ts: now - (i * DAY) - 999999,
+        thread: 100 + k,
       });
     }
   }
-  const dated = Digest.build({
+  const built = Digest.build({
     ...signals,
     messages: {
-      total: 2400, threads: 3, groupThreads: 0, sent: 1200, received: 1200,
-      avgSentLength: 44, ownTexts,
+      total: 4000, threads: 20, groupThreads: 0, sent: 1330, received: 2670,
+      avgSentLength: 50, ownTexts,
     },
   }, { includeMessages: true });
-  const sample = dated.directMessages.ownMessageSample;
+  const sample = built.directMessages.ownMessageSample;
 
-  check('the sample is capped at the limit, not at whichever bucket filled',
+  check('the sample is capped at the limit',
     sample.length === Digest.LIMITS.messages, String(sample.length));
-  check('every message still carries the year it was sent',
-    sample.every(line => /^\[\d{4}\] /.test(line)), sample[0]);
+  check('every message carries its year and its conversation',
+    sample.every(line => /^\[\d{4}\] \[t\d+\] /.test(line)), sample[0]);
 
-  const era = line => line.replace(/^\[\d{4}\] /, '').slice(0, 2);
-  const kept = { E0: 0, E1: 0, E2: 0 };
-  for (const line of sample) kept[era(line)] += 1;
-  // Only era 0 lies inside the window, so it takes the recent half and nothing
-  // more. Exactly, not at least: under the previous shape the longest and
-  // mid-length buckets drew from the whole archive afterwards and era 0 could
-  // win places there too. Position cannot produce this either — era 0 is
-  // written first in the list, so a rule reading the tail would favour era 2.
-  check('the recent era takes its half of the places and no more',
-    kept.E0 === Digest.LIMITS.messagesRecent, JSON.stringify(kept));
-  check('and the older era takes the other half, spread across the years in it',
-    kept.E1 + kept.E2 === Digest.LIMITS.messagesOlder && kept.E1 > 0 && kept.E2 > 0,
-    JSON.stringify(kept));
+  // Label against source thread. The tag is assigned by rank, so t1 has to be
+  // the conversation with the most messages in it — thread T0 here — and the
+  // correspondence has to hold all the way down. A tag that did not track
+  // volume would still look like a tag.
+  const parsed = sample.map(line => {
+    const m = /^\[\d{4}\] \[t(\d+)\] (T|TAIL)(\d+) /.exec(line);
+    return m ? { label: Number(m[1]), tail: m[2] === 'TAIL', thread: Number(m[3]) } : null;
+  });
+  check('every line parses back to a label and a source conversation',
+    parsed.every(Boolean), sample.find((_, i) => !parsed[i]));
+  // Everything below reads `rows`, not `parsed`. Removing the tag entirely
+  // leaves every entry null, and the checks that follow used to die on a
+  // TypeError before the runner printed a single ✗ — so the injection that
+  // deleted the tag looked like it passed. A check that cannot report is not
+  // a check.
+  const rows = parsed.filter(Boolean);
+  check('the tag is assigned by volume rank, so t1 is the conversation they use most',
+    rows.length === sample.length && rows.every(p => p.label === p.thread + 1),
+    JSON.stringify(rows.filter(p => p.label !== p.thread + 1).slice(0, 3)));
 
-  // The longest half, measured *within* the recent era rather than across the
-  // archive. The fixture repeats the same 400 lengths in each of its three
-  // eras, so the 75 longest messages overall are spread across all three and a
-  // globally-ranked bucket would give era 0 about a quarter of them. Era 0
-  // keeping its own top 75 is therefore only possible if the ranking happens
-  // inside the era.
-  const bodies = sample.map(line => line.replace(/^\[\d{4}\] /, ''));
-  const recentLengths = ownTexts.filter(m => m.text.startsWith('E0 '))
-    .map(m => m.text.length).sort((a, b) => b - a);
-  const cutoff = recentLengths[Digest.LIMITS.messagesLongest - 1];
-  const longKept = bodies.filter(b => b.startsWith('E0 ') && b.length >= cutoff).length;
-  check('each era keeps its own longest, not the archive-wide longest',
-    longKept === Digest.LIMITS.messagesLongest,
-    longKept + ' of ' + Digest.LIMITS.messagesLongest);
+  const labels = [...new Set(rows.map(p => p.label))].sort((a, b) => a - b);
+  check('only the top ten conversations are drawn from',
+    labels.length === Digest.LIMITS.messageTopThreads &&
+    labels[labels.length - 1] === Digest.LIMITS.messageTopThreads, JSON.stringify(labels));
+  // The tail is the whole point of the top-ten rule and it is written *last*
+  // into the input, so a sampler reading the head of the list would exclude it
+  // by accident. These are also the oldest messages in the fixture, so a
+  // recency rule would exclude them by accident too. Only the volume rank can
+  // produce this.
+  check('and the one-off conversations are ignored entirely',
+    !rows.some(p => p.tail), JSON.stringify(rows.filter(p => p.tail).slice(0, 3)));
 
-  // The two halves of an era, on a fixture where every count is exact.
-  //
-  // Built so that no bucket can borrow from another: the recent era holds
-  // exactly 75 long messages and 325 short ones, so the longest half is
-  // precisely the long ones and the random half can only come from the short
-  // ones. If the random half draws from the whole era instead of from what the
-  // longest half left, or if either half goes missing, one of these three
-  // numbers moves.
-  //
-  // The short messages matter more than they look. They are the shortest thing
-  // in the archive and every other rule here would step over them — which is
-  // the point of drawing the second half at random rather than by length.
-  //
-  // Their lengths vary, and that is load-bearing. Written first with every
-  // short message the same length, the counts below could not tell "75 longest
-  // then 75 at random" apart from "150 longest": once the long ones were taken
-  // the rest tied, and a length sort on a tie returns them in the order they
-  // arrived. Setting the split to take all 150 by length changed nothing and
-  // the block passed. With the lengths spread, a draw by length lands in the
-  // top of the range and a draw at random does not, which is what the quartile
-  // checks below actually test.
-  {
-    const shaped = [];
-    for (let i = 0; i < 75; i++) {
-      shaped.push({ text: 'BIG' + i + ' ' + 'b'.repeat(800), ts: now - i * DAY });
-    }
-    for (let i = 0; i < 325; i++) {
-      shaped.push({ text: 'SML' + i + ' ' + 's'.repeat(45 + (i % 60)), ts: now - (75 + i) * DAY });
-    }
-    for (let i = 0; i < 400; i++) {
-      shaped.push({ text: 'OLD' + i + ' ' + 'o'.repeat(150 + (i % 100)), ts: now - (700 + i) * DAY });
-    }
-    const split = Digest.build({
-      ...signals,
-      messages: {
-        total: 800, threads: 3, groupThreads: 0, sent: 800, received: 0,
-        avgSentLength: 300, ownTexts: shaped,
-      },
-    }, { includeMessages: true });
-    const matching = prefix => split.directMessages.ownMessageSample
-      .filter(line => new RegExp('^\\[\\d{4}\\] ' + prefix + '\\d+ ').test(line))
-      .map(line => line.replace(/^\[\d{4}\] /, '').length);
-    const bigs = matching('BIG'), smalls = matching('SML'), olds = matching('OLD');
-    const got = { BIG: bigs.length, SML: smalls.length, OLD: olds.length };
-    check('the longest half of an era is exactly the era\'s longest messages',
-      got.BIG === Digest.LIMITS.messagesLongest, JSON.stringify(got));
-    check('and the random half reaches the ordinary writing the longest half left',
-      got.SML === Digest.LIMITS.messagesRandom, JSON.stringify(got));
-    check('while the older era keeps its own half regardless of how it compares',
-      got.OLD === Digest.LIMITS.messagesOlder, JSON.stringify(got));
+  const perLabel = labels.map(l => rows.filter(p => p.label === l).length);
+  check('the places are shared out in proportion to volume',
+    perLabel.every((n, i) => i === 0 || n <= perLabel[i - 1]), JSON.stringify(perLabel));
+  // The cap, which on this fixture binds twice: T0 has 500 of the 1,330
+  // eligible messages and would take 117 places unchecked, and T1 reaches it
+  // on the redistribution pass afterwards.
+  const cap = Math.floor(Digest.LIMITS.messages * Digest.LIMITS.messageThreadCap);
+  check('no conversation takes more than a fifth of the sample',
+    perLabel.every(n => n <= cap), JSON.stringify(perLabel));
+  check('and the largest conversation is actually held there, not merely under it',
+    perLabel[0] === cap, perLabel[0] + ' vs cap ' + cap);
+  // What the cap takes from T0 has to land somewhere, or the sample comes back
+  // short while eligible messages sit unused.
+  check('the places the cap took are handed to the other conversations',
+    perLabel.reduce((s, n) => s + n, 0) === Digest.LIMITS.messages,
+    JSON.stringify(perLabel));
 
-    // Drawn at random within the half, not by length a second time. A draw by
-    // length could not reach the bottom quartile of either era at all; a draw
-    // at random reaches it about a quarter of the time, so a single message
-    // from down there is enough to tell the two apart.
-    const bottomQuartile = (all, kept) => {
-      const sorted = all.map(m => m.text.length).sort((a, b) => a - b);
-      const q1 = sorted[Math.floor(sorted.length * 0.25)];
-      return kept.filter(len => len <= q1).length;
-    };
-    check('the random half of the recent era is drawn at random, not by length again',
-      bottomQuartile(shaped.filter(m => m.text.startsWith('SML')), smalls) > 0,
-      smalls.slice().sort((a, b) => a - b).slice(0, 5).join(','));
-    check('and so is the random half of the older era',
-      bottomQuartile(shaped.filter(m => m.text.startsWith('OLD')), olds) > 0,
-      olds.slice().sort((a, b) => a - b).slice(0, 5).join(','));
-  }
+  check('coverage says how many conversations the sample spans, and of how many',
+    built.coverage.sampling.ownMessages.fromThreads === Digest.LIMITS.messageTopThreads &&
+    built.coverage.sampling.ownMessages.ofThreads === SIZES.length + TAIL,
+    JSON.stringify(built.coverage.sampling.ownMessages));
+  check('and still reports the sample against every message they sent',
+    built.coverage.sampling.ownMessages.available === ownTexts.length,
+    JSON.stringify(built.coverage.sampling.ownMessages));
 
-  // An archive with nothing outside the window — a new account, or somebody
-  // who only started messaging recently. The older era has no places to give
-  // up and hands its 150 to the recent one, which then works to a quota of 300.
-  //
-  // Counting the sample would not catch a missing handover: the backstop fill
-  // at the end of the sampler tops it back up to 300 either way. What changes
-  // is *which* 300, so the fixture makes length run against time — the oldest
-  // messages in the window are the longest — and asks whether the enlarged
-  // longest half actually reached them. The backstop fills by recency, so
-  // without the handover it returns the short newest ones instead.
-  {
-    const young = [];
-    for (let i = 0; i < 500; i++) {
-      young.push({ text: 'Y' + String(i).padStart(3, '0') + ' ' + 'y'.repeat(60 + i), ts: now - i * DAY });
-    }
-    const built = Digest.build({
-      ...signals,
-      messages: {
-        total: 500, threads: 3, groupThreads: 0, sent: 500, received: 0,
-        avgSentLength: 200, ownTexts: young,
-      },
-    }, { includeMessages: true });
-    const lines = built.directMessages.ownMessageSample;
-    const want = Digest.LIMITS.messagesLongest + Digest.LIMITS.messagesRandom;
-    const lengths = young.map(m => m.text.length).sort((a, b) => b - a);
-    const cutoff = lengths[want - 1];
-    const kept = lines.map(l => l.replace(/^\[\d{4}\] /, ''))
-      .filter(b => b.length >= cutoff).length;
-    check('an archive entirely inside the window still fills all 300 places',
-      lines.length === Digest.LIMITS.messages, String(lines.length));
-    check('and the era that had places to spare gave them to the one that did not',
-      kept === want, kept + ' of the longest ' + want);
-  }
+  // Grouped by conversation, chronological within one. A reader asked to judge
+  // a relationship should get it as a run rather than interleaved with nine
+  // others — which is the trade the thread tags bought, since the old sampler
+  // returned one chronological run across the whole archive.
+  const runs = [];
+  for (const p of rows) if (!runs.length || runs[runs.length - 1] !== p.label) runs.push(p.label);
+  check('the sample is grouped by conversation rather than interleaved',
+    runs.length === labels.length, JSON.stringify(runs));
 
   // Deterministic, which is not a nicety: the server keys its result cache on
   // the digest, so a draw that moved between rebuilds would change the key,
@@ -3360,12 +3318,97 @@ check('but the count it was read for still is',
   const again = Digest.build({
     ...signals,
     messages: {
-      total: 2400, threads: 3, groupThreads: 0, sent: 1200, received: 1200,
-      avgSentLength: 44, ownTexts,
+      total: 4000, threads: 20, groupThreads: 0, sent: 1330, received: 2670,
+      avgSentLength: 50, ownTexts,
     },
   }, { includeMessages: true });
-  check('the random bucket is drawn deterministically, so a retry keys the same',
+  check('the draw is deterministic, so a retry keys the same',
     JSON.stringify(again.directMessages.ownMessageSample) === JSON.stringify(sample));
+}
+
+// ---------- the two halves inside one conversation ----------
+//
+// Half the most recent, half the longest of what the recent half did not take.
+// On a fixture built so the two cannot be confused: length runs *against*
+// time, so the newest messages are the shortest and the longest are the
+// oldest. A rule that took the longest first would take the oldest twice and
+// the middle would show up in neither half.
+{
+  const DAY = 86400;
+  const now = Math.floor(Date.parse('2026-06-01T00:00:00Z') / 1000);
+  const ownTexts = [];
+  for (let i = 0; i < 1000; i++) {
+    // i = 0 is oldest and longest, i = 999 is newest and shortest.
+    ownTexts.push({
+      text: 'M' + String(i).padStart(3, '0') + ' ' + 'x'.repeat(45 + Math.floor((999 - i) / 2)),
+      ts: now - (999 - i) * DAY,
+      thread: 0,
+    });
+  }
+  const built = Digest.build({
+    ...signals,
+    messages: {
+      total: 2000, threads: 1, groupThreads: 0, sent: 1000, received: 1000,
+      avgSentLength: 300, ownTexts,
+    },
+  }, { includeMessages: true });
+  const sample = built.directMessages.ownMessageSample;
+  const idx = sample.map(line => Number(/M(\d+) /.exec(line)[1]));
+  const half = Math.round(Digest.LIMITS.messages * Digest.LIMITS.messageRecentShare);
+
+  check('one conversation on its own fills the whole sample',
+    sample.length === Digest.LIMITS.messages, String(sample.length));
+  check('a single conversation is not tagged, since there is nothing to tell apart',
+    sample.every(line => !/\[t\d+\]/.test(line)), sample[0]);
+  check('half the places go to the most recent messages in it',
+    idx.filter(i => i >= 1000 - half).length === half,
+    idx.filter(i => i >= 1000 - half).length + ' of ' + half);
+  check('and half to the longest of what recency did not already take',
+    idx.filter(i => i < half).length === half,
+    idx.filter(i => i < half).length + ' of ' + half);
+  // The discriminating part. Everything between the two halves is both
+  // unremarkable in length and not recent, so nothing but a genuine two-rule
+  // split can leave it out.
+  check('and the middle of the conversation appears in neither half',
+    idx.every(i => i < half || i >= 1000 - half),
+    JSON.stringify(idx.filter(i => i >= half && i < 1000 - half).slice(0, 5)));
+}
+
+// ---------- the cap yields rather than starving the sample ----------
+//
+// One large conversation and two small ones. Held strictly to a fifth each the
+// sample would come back with 120 of its 300 places filled and a thousand
+// eligible messages unused, which is a worse sample than an honestly lopsided
+// one. The cap balances where there is something to balance and gets out of
+// the way where there is not.
+{
+  const DAY = 86400;
+  const now = Math.floor(Date.parse('2026-06-01T00:00:00Z') / 1000);
+  const ownTexts = [];
+  for (let i = 0; i < 1000; i++) {
+    ownTexts.push({ text: 'BIG' + i + ' ' + 'b'.repeat(40), ts: now - i * DAY, thread: 0 });
+  }
+  for (let k = 1; k <= 2; k++) {
+    for (let i = 0; i < 10; i++) {
+      ownTexts.push({ text: 'S' + k + '_' + i + ' ' + 's'.repeat(40), ts: now - i * DAY - k, thread: k });
+    }
+  }
+  const built = Digest.build({
+    ...signals,
+    messages: {
+      total: 2040, threads: 3, groupThreads: 0, sent: 1020, received: 1020,
+      avgSentLength: 45, ownTexts,
+    },
+  }, { includeMessages: true });
+  const sample = built.directMessages.ownMessageSample;
+  const big = sample.filter(line => /\[t1\] BIG/.test(line)).length;
+  check('a lopsided archive still fills every place it can',
+    sample.length === Digest.LIMITS.messages, String(sample.length));
+  check('and the small conversations are drained rather than padded',
+    sample.filter(line => /\[t[23]\] S/.test(line)).length === 20,
+    String(sample.filter(line => /\[t[23]\] S/.test(line)).length));
+  check('so the dominant conversation is allowed past the cap to fill the rest',
+    big === Digest.LIMITS.messages - 20, String(big));
 }
 
 // ---------- the floor on a message ----------
@@ -3430,36 +3473,38 @@ check('but the count it was read for still is',
 // the point and the rest is usually the same point continuing, so clipping it
 // costs less than losing the message. The number matters a second time over,
 // because the length a message is *measured* at is also what decides which
-// bucket it lands in, and those are not the same length once the ceiling bites.
+// half it lands in, and those are not the same length once the ceiling bites.
 {
   const DAY = 86400;
-  const MONTH18 = 18 * 30 * DAY;
   const now = Math.floor(Date.parse('2026-06-01T00:00:00Z') / 1000);
   const ownTexts = [];
-  // Recent enough to fill the recent bucket on its own, so that everything the
-  // longest bucket picks below is drawn from the older messages.
+  // One conversation, so the whole sample is the two halves of it. The newest
+  // 200 fill the recent half on their own, which leaves the longest half to be
+  // drawn entirely from the older messages below.
   for (let i = 0; i < 200; i++) {
     ownTexts.push({ text: 'R' + i + ' ' + 'r'.repeat(120), ts: now - i * DAY });
   }
-  // Older than the window. Filler for the middle bucket to draw on, then two
-  // sets that both run past the ceiling: S is barely over it and sits earlier
-  // in time, L is far over it and sits later.
+  // Filler, then two oversized sets: S is barely over the ceiling and sits
+  // earlier in time, L is far over it and sits later. Together they are 240
+  // messages competing for the longest half's 150 places, which is what makes
+  // the check below discriminating — with 75 of each they would both fit and
+  // the measurement being tested would not matter.
   for (let i = 0; i < 200; i++) {
-    ownTexts.push({ text: 'F' + i + ' ' + 'f'.repeat(150), ts: now - MONTH18 - (400 + i) * DAY });
+    ownTexts.push({ text: 'F' + i + ' ' + 'f'.repeat(150), ts: now - (400 + i) * DAY });
   }
-  for (let i = 0; i < 75; i++) {
-    ownTexts.push({ text: 'S' + i + ' ' + 's'.repeat(620), ts: now - MONTH18 - (2000 + i) * DAY });
+  for (let i = 0; i < 120; i++) {
+    ownTexts.push({ text: 'S' + i + ' ' + 's'.repeat(620), ts: now - (2000 + i) * DAY });
   }
-  for (let i = 0; i < 75; i++) {
+  for (let i = 0; i < 120; i++) {
     ownTexts.push({
       text: 'L' + i + ' ' + 'l'.repeat(1900) + ' ENDOFLONG',
-      ts: now - MONTH18 - (1000 + i) * DAY,
+      ts: now - (1000 + i) * DAY,
     });
   }
   const capped = Digest.build({
     ...signals,
     messages: {
-      total: 1100, threads: 5, groupThreads: 0, sent: 550, received: 550,
+      total: 1280, threads: 1, groupThreads: 0, sent: 640, received: 640,
       avgSentLength: 180, ownTexts,
     },
   }, { includeMessages: true });
@@ -3476,14 +3521,13 @@ check('but the count it was read for still is',
     !bodies.some(b => b.includes('ENDOFLONG')));
   // The discriminating one, and the reason the fixture has two oversized sets
   // rather than one. Measured after clipping they are the same length, so the
-  // longest bucket fills with whichever the sort reaches first — the S set,
+  // longest half fills with whichever the sort reaches first — the S set,
   // being older and therefore earlier in the chronological order the sort is
-  // stable against — and the genuinely long messages lose their own bucket.
-  // Measured whole, L wins on its merits, which is what "longest" has to mean
-  // for the bucket to be worth having.
-  check('the longest bucket ranks on the real length, not the clipped one',
-    longs.length === Digest.LIMITS.messagesLongest,
-    longs.length + ' of ' + Digest.LIMITS.messagesLongest);
+  // stable against — and the genuinely long messages lose their places to
+  // messages a third their size. Measured whole, L wins on its merits, which
+  // is what "longest" has to mean for the half to be worth having.
+  check('the longest half ranks on the real length, not the clipped one',
+    longs.length === 120, longs.length + ' of 120');
 }
 
 // Links in the reader's own messages. A shared ride-tracking link is not
@@ -3541,6 +3585,32 @@ check('and the years are real ones off the export, not a constant',
     const year = Number(line.slice(1, 5));
     return year >= 2005 && year <= 2100;
   }), withDms.directMessages.ownMessageSample.slice(0, 2).join(' | '));
+
+// The same argument, for the conversation. Every per-thread check below builds
+// `ownTexts` by hand with a `thread` on each record, so all of them pass with
+// the parser's half of the wiring deleted — which is exactly what happened on
+// the first run of this change. This is the check that fails when it is: the
+// thread index has to survive `messages()`, the owner filter and the digest.
+//
+// The fixture's three talkative threads carry their own number in the message
+// text, so the tags can be checked against the conversation they came from
+// rather than merely counted. Ranking is not asserted here — all three threads
+// hold six of the owner's messages, so the order is a tie broken on age — but
+// the mapping has to be one label per thread and one thread per label.
+{
+  const tagged = withDms.directMessages.ownMessageSample
+    .map(line => /^\[\d{4}\] \[t(\d+)\] Own message \d+ in thread (\d+)\./.exec(line))
+    .filter(Boolean);
+  const pairs = new Map();
+  for (const m of tagged) pairs.set(m[2], new Set([...(pairs.get(m[2]) || []), m[1]]));
+  check('a message parsed from a real archive reaches the digest threaded',
+    tagged.length === withDms.directMessages.ownMessageSample.length && tagged.length === 18,
+    tagged.length + ' tagged of ' + withDms.directMessages.ownMessageSample.length);
+  check('and each conversation in the export gets exactly one tag of its own',
+    pairs.size === 3 && [...pairs.values()].every(labels => labels.size === 1) &&
+    new Set([...pairs.values()].map(s => [...s][0])).size === 3,
+    JSON.stringify([...pairs].map(([t, l]) => [t, [...l]])));
+}
 
 check('DMs are parsed when included', withDmSignals.messages.threads === 13, String(withDmSignals.messages.threads));
 check('the account owner is identified in the threads', withDmSignals.messages.owner === 'Aleç',
@@ -3857,15 +3927,12 @@ const heavyMessagesSignals = {
   },
 };
 const heavyMessages = Digest.build(heavyMessagesSignals, { includeMessages: true });
-check('the DM cap is 300, split into two eras that add up to it',
-  Digest.LIMITS.messages === 300 &&
-  Digest.LIMITS.messagesRecent + Digest.LIMITS.messagesOlder === Digest.LIMITS.messages,
-  JSON.stringify([Digest.LIMITS.messagesRecent, Digest.LIMITS.messagesOlder]));
-check('and each era is split in half, longest and random',
-  Digest.LIMITS.messagesLongest + Digest.LIMITS.messagesRandom ===
-    Digest.LIMITS.messagesRecent &&
-  Digest.LIMITS.messagesLongest === Digest.LIMITS.messagesRandom,
-  JSON.stringify([Digest.LIMITS.messagesLongest, Digest.LIMITS.messagesRandom]));
+check('the DM cap is 300, drawn from the ten conversations they write in most',
+  Digest.LIMITS.messages === 300 && Digest.LIMITS.messageTopThreads === 10,
+  JSON.stringify([Digest.LIMITS.messages, Digest.LIMITS.messageTopThreads]));
+check('no conversation takes more than a fifth, and each is split down the middle',
+  Digest.LIMITS.messageThreadCap === 0.20 && Digest.LIMITS.messageRecentShare === 0.5,
+  JSON.stringify([Digest.LIMITS.messageThreadCap, Digest.LIMITS.messageRecentShare]));
 check('a heavy account caps DMs at that limit',
   heavyMessages.directMessages.ownMessageSample.length === 300,
   heavyMessages.directMessages.ownMessageSample.length + ' messages');

@@ -18,14 +18,22 @@
   const LIMITS = {
     captions: 560,
     comments: 360,
-    // Messages, drawn in two eras of equal size and each era split in half —
-    // see sampleMessages for why the era split exists and what each half is
-    // for. The two eras add up to `messages`; the two halves add up to an era.
+    // Messages, drawn per conversation rather than from one pile — see
+    // sampleMessages for how the places are shared out and why.
     messages: 300,
-    messagesRecent: 150,
-    messagesOlder: 150,
-    messagesLongest: 75,
-    messagesRandom: 75,
+    // Only the ten conversations they use most. Everything below that is the
+    // one-off end of an inbox: a reply to a stranger, a delivery courier, a
+    // group somebody was added to once. Those messages are real but they are
+    // not evidence about a relationship, and an archive has hundreds of them.
+    messageTopThreads: 10,
+    // And no one conversation may take more than a fifth of the sample. Left
+    // purely proportional, a reader whose partner accounts for half their
+    // messages would get a report about one relationship.
+    messageThreadCap: 0.20,
+    // Within a conversation: this share the most recent, the rest the longest
+    // of what is left. Recency shows where the relationship is now, length
+    // shows where they actually said something in it.
+    messageRecentShare: 0.5,
     // The floor a message must clear to take one of those 300 places — see
     // sampleMessages for why this is a quality number and not a size one.
     //
@@ -232,7 +240,14 @@
   // Raised to 22,600 for the Confidence section, which is prose that pays for
   // itself: the model was scoring 88/100 off totals it had never been shown.
   // Measured at 22,378.
-  const FIXED_INPUT_TOKENS = 22600;
+  // Raised again to 22,900 for the thread-tag paragraph — what a [t1]..[t10]
+  // tag is, that a difference in register across tags is a finding rather than
+  // noise, and the two things the sample's shape does not license. Measured at
+  // 22,655, and the check below caught the overrun the run it happened, again.
+  // The cost is 300 tokens of reserve, which is 1,050 characters off the
+  // digest ceiling — under 1% of it, against a heavy account that already sits
+  // 18% clear.
+  const FIXED_INPUT_TOKENS = 22900;
 
   // lib/gemini.js caps generation here, so this is the most output — visible
   // report plus thinking — that a single call can possibly bill for. Held to
@@ -414,53 +429,35 @@
   // longest, so the old sampler could not see them at all. It saw the last
   // fortnight and the essays.
   //
-  // Two eras, split at eighteen months, each sampled the same way:
+  // Per conversation, not from one pile. Three rules:
   //
-  //   · **150 from the last eighteen months** — 75 longest, 75 at random.
-  //   · **150 from before that** — 75 longest, 75 at random.
+  //   · **The ten conversations they use most**, and nothing else. Below that
+  //     is the one-off end of an inbox — a stranger, a courier, a group
+  //     somebody was added to and left. Real messages, but not evidence about
+  //     a relationship, and an archive holds hundreds of them.
+  //   · **Places shared out in proportion to volume, capped at a fifth each.**
+  //     Proportion is what makes the sample resemble the person's actual
+  //     social life; the cap is what stops one relationship becoming the whole
+  //     report.
+  //   · **Half the most recent, half the longest**, inside each conversation.
+  //     Recency shows where that relationship is now, length shows where they
+  //     actually said something in it.
   //
-  // The symmetry is the point. Under the previous shape — 150 recent, then the
-  // longest of everything, then the mid-length of everything — both of the
-  // non-recent buckets drew from the whole archive at once, so a decade of
-  // older messages competed against eighteen months of newer ones on length
-  // alone. A reader whose long messages happen to sit in one era got an era.
-  // Splitting the quota first means the older half is guaranteed its own
-  // representation, at its own longest and its own ordinary, and how somebody
-  // wrote at 22 can be compared with how they write now.
+  // The previous shape split the archive into two eras and sampled each. That
+  // was an improvement on ranking everything at once, but it was still blind to
+  // who was being written to — and *who* is most of what a message means. A
+  // pooled sample cannot distinguish somebody who writes warmly from somebody
+  // who writes warmly to one person and curtly to everyone else, and those are
+  // different people. Threads make that visible; eras never could.
   //
-  // Within an era, longest and random are complementary rather than
-  // overlapping: the longest half is taken first and the random half is drawn
-  // from what is left, so "random" lands on the ordinary end without having to
-  // be told to. That is what the old mid-length bucket was reaching for with
-  // an interquartile filter, reached here by construction instead.
+  // Chronology survives inside a conversation rather than across the sample,
+  // which is the right trade now: reading one relationship in order says more
+  // than reading forty interleaved.
   //
-  // Fewer messages than before, and deliberately: 300 against the old 1,000.
-  // The trade is breadth for depth, and it is worth naming, because a real
-  // archive had 375 active threads and 300 messages is under one per
-  // relationship. The breadth is carried by the counts beside this —
-  // activeThreads, mostEngagedWith, sent against received — and the sample's
-  // job is voice, not census.
-  // Seconds, because that is the unit every `ts` in this file carries —
-  // instagram.js divides timestamp_ms by 1000 on the way in. Written in
-  // milliseconds first, which made the window larger than any archive and so
-  // silently selected everything: the recent bucket spread itself evenly
-  // across a decade instead of across eighteen months, and looked like it was
-  // working because it still returned 150 messages.
-  const MESSAGE_WINDOW_SECONDS = 18 * 30 * 24 * 60 * 60;
-
-  // Deterministic, and that is not a detail. The server keys its result cache
-  // on the digest, so a sample drawn with Math.random would produce a
-  // different digest on every rebuild — a different key, a missed cache, and
-  // the reader paying again for the retry that was supposed to be free. This
-  // hashes the text itself, so the same archive always yields the same draw.
-  function stableHash(text) {
-    let hash = 2166136261;
-    for (let i = 0; i < text.length; i++) {
-      hash ^= text.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
-    }
-    return hash >>> 0;
-  }
+  // Nothing here knows who anybody is. Threads arrive as integers from
+  // instagram.js and are relabelled by rank — t1 is the conversation they use
+  // most — so the sample carries the shape of their social life and none of
+  // its names.
 
   function sampleMessages(texts, opts) {
     const maxChars = opts.maxChars;
@@ -469,77 +466,129 @@
     const seen = new Set();
     for (const item of texts) {
       const dated = Boolean(item) && typeof item === 'object';
-      // Measured whole, shown clipped, and the order matters. The buckets rank
-      // on `len`, so measuring after the ceiling would give every message past
-      // it the same length as every other, and "the 75 longest" would collapse
-      // into whichever of the tied ones the sort reached first. It would also
-      // pull the quartile boundaries below in, since a clipped tail piles up
-      // at the top of the distribution instead of spreading out.
+      // Measured whole, shown clipped, and the order matters. The longest half
+      // ranks on `len`, so measuring after the ceiling would give every message
+      // past it the same length as every other and collapse that half into
+      // whichever of the tied ones the sort reached first.
       const full = trim(dated ? item.text : item, Infinity);
       const value = full.length > maxChars ? full.slice(0, maxChars) + '…' : full;
       if (full.length < floor || seen.has(value)) continue;
       seen.add(value);
       const ts = dated && Number.isFinite(item.ts) && item.ts > 0 ? item.ts : 0;
       const year = dated ? yearOf(item.ts) : '';
-      cleaned.push({ ts, len: full.length, display: year ? '[' + year + '] ' + value : value });
+      // Everything undated and unthreaded lands in one conversation, which is
+      // what a hand-built fixture and a bare string list amount to. That case
+      // then behaves as one thread with no cap, rather than as 300 threads of
+      // one message each.
+      const thread = dated && Number.isFinite(item.thread) ? item.thread : 0;
+      cleaned.push({ ts, thread, len: full.length, year, text: value });
     }
     cleaned.sort((a, b) => a.ts - b.ts);
-    if (cleaned.length <= opts.limit) return cleaned.map(c => c.display);
 
-    const chosen = new Set();
-    const take = list => { for (const c of list) if (chosen.size < opts.limit) chosen.add(c); };
+    // Grouped, then ranked by how many *eligible* messages each holds rather
+    // than by raw volume. A conversation of four hundred one-word replies is
+    // not one this sample can draw on, and ranking it above a real
+    // correspondence would reserve places nothing could fill. Ties break on
+    // the older conversation, so the order is total and the draw stays
+    // deterministic — the result cache keys on the digest, and a sample that
+    // moved between rebuilds would charge the reader for their own retry.
+    const byThread = new Map();
+    for (const c of cleaned) {
+      if (!byThread.has(c.thread)) byThread.set(c.thread, []);
+      byThread.get(c.thread).push(c);
+    }
+    const ranked = [...byThread.values()]
+      .sort((a, b) => b.length - a.length || a[0].ts - b[0].ts || a[0].text.localeCompare(b[0].text));
+    const top = ranked.slice(0, opts.topThreads);
+    if (opts.stats) {
+      opts.stats.threadsAvailable = ranked.length;
+      opts.stats.threadsUsed = top.length;
+    }
+    if (!top.length) return [];
 
-    // The era boundary. Anchored to their newest message rather than to the
-    // clock, so an account that went quiet two years ago still has a "recent"
-    // era — the last eighteen months *it was used* — instead of an empty one
-    // and a fallback. One rule rather than a rule and an exception.
-    const newest = cleaned[cleaned.length - 1].ts;
-    const since = newest - MESSAGE_WINDOW_SECONDS;
-    const recent = cleaned.filter(c => c.ts >= since);
-    const older = cleaned.filter(c => c.ts < since);
+    const sizes = top.map(t => t.length);
+    const pool = sizes.reduce((sum, n) => sum + n, 0);
+    const total = Math.min(opts.limit, pool);
+    // The cap binds only when places are actually scarce, and it can never sit
+    // below an equal share: an archive with three conversations held to a fifth
+    // each would return three fifths of a sample and leave the rest unused.
+    const cap = pool <= opts.limit
+      ? total
+      : Math.max(Math.ceil(total / sizes.length), Math.floor(total * opts.threadCap));
+    const quota = allocatePlaces(sizes, total, cap);
 
-    // Each era gets half the places, and an era that cannot fill its half
-    // hands the remainder to the other. Without this a young account — or one
-    // whose whole archive sits inside the window — would come back with 150
-    // messages and 150 unused places, which is a worse sample than the one
-    // rule it was protecting.
-    let recentWant = opts.recent;
-    let olderWant = opts.older;
-    if (recent.length < recentWant) olderWant += recentWant - recent.length;
-    if (older.length < olderWant) recentWant += olderWant - older.length;
+    const out = [];
+    const tagged = top.length > 1;
+    top.forEach((thread, rank) => {
+      const want = quota[rank];
+      if (want <= 0) return;
+      // The recent half first, then the longest of what it did not take, so
+      // the two are complementary rather than competing for the same messages.
+      // Taken off the end because each thread is already in chronological
+      // order — and guarded, because slice(-0) is the whole array rather than
+      // none of it, which would hand a thread with no recent share every
+      // message it has.
+      const recentCount = Math.min(want, Math.round(want * opts.recentShare));
+      const picked = new Set(recentCount > 0 ? thread.slice(-recentCount) : []);
+      for (const c of thread.filter(m => !picked.has(m)).sort((a, b) => b.len - a.len)
+        .slice(0, want - picked.size)) picked.add(c);
+      const label = tagged ? '[t' + (rank + 1) + '] ' : '';
+      for (const c of thread) {
+        if (picked.has(c)) out.push((c.year ? '[' + c.year + '] ' : '') + label + c.text);
+      }
+    });
+    return out;
+  }
 
-    // Longest first, then random from what the longest did not take. The split
-    // is expressed as a ratio of the two constants rather than as the constants
-    // themselves, so that an era working to an enlarged quota still divides its
-    // places the way the configuration says to.
-    const longestShare = opts.longest / (opts.longest + opts.random);
-    const fromEra = (era, want) => {
-      if (!era.length || want <= 0) return;
-      const byLength = era.slice().sort((a, b) => b.len - a.len)
-        .slice(0, Math.min(want, Math.round(want * longestShare)));
-      const picked = new Set(byLength);
-      take(byLength);
-      take(era.filter(c => !picked.has(c))
-        .sort((a, b) => stableHash(a.display) - stableHash(b.display))
-        .slice(0, want - byLength.length));
+  /**
+   * Share `total` places among conversations of the given sizes, in proportion
+   * to size, with no conversation taking more than `cap`.
+   *
+   * Proportional-and-capped is not one step. A conversation that cannot take
+   * its full share — because it is at the cap, or because it simply has fewer
+   * messages than its share — leaves a remainder behind, and that remainder
+   * has to go somewhere or the sample quietly comes back short. So this is
+   * water-filling: hand out shares, collect what would not fit, hand out the
+   * remainder among whoever still has room, repeat.
+   *
+   * The rounding tail at the end walks in rank order rather than spreading the
+   * last few places evenly. Deterministic beats fair for a handful of places,
+   * because the result cache keys on the digest.
+   */
+  function allocatePlaces(sizes, total, cap) {
+    const quota = sizes.map(() => 0);
+    let left = total;
+    const fill = ceiling => {
+      const roomOf = i => Math.min(ceiling, sizes[i]) - quota[i];
+      for (let pass = 0; pass < 8 && left > 0; pass++) {
+        const open = sizes.map((_, i) => i).filter(i => roomOf(i) > 0);
+        if (!open.length) return;
+        const share = open.reduce((sum, i) => sum + sizes[i], 0);
+        let handed = 0;
+        for (const i of open) {
+          const give = Math.min(roomOf(i), Math.floor(left * sizes[i] / share));
+          quota[i] += give;
+          handed += give;
+        }
+        if (!handed) break;
+        left -= handed;
+      }
+      for (let i = 0; left > 0 && i < sizes.length; i++) {
+        const give = Math.min(roomOf(i), left);
+        quota[i] += give;
+        left -= give;
+      }
     };
-    fromEra(recent, recentWant);
-    fromEra(older, olderWant);
-
-    const rest = () => cleaned.filter(c => !chosen.has(c));
-
-    // A backstop rather than a rule. The quota handover above should leave
-    // nothing on the table, but rounding and an era that is short in a way the
-    // handover did not anticipate would both land here, and a sample quietly
-    // returning 280 of 300 places is not worth risking to save four lines.
-    // Filled from the most recent of what is left, which is the half a reader
-    // would miss first.
-    if (chosen.size < opts.limit) take(rest().reverse());
-
-    // One chronological run, the same reason sampleTexts restores order: the
-    // picks come from four separate rules and a reader asked to see a
-    // trajectory should not be handed them interleaved.
-    return cleaned.filter(c => chosen.has(c)).map(c => c.display);
+    fill(cap);
+    // If places are still unclaimed once the cap has had its say, the cap has
+    // stopped balancing the sample and started shrinking it. A reader with one
+    // large conversation and two small ones would come back with a third of a
+    // sample while a thousand eligible messages sat unused — which is worse,
+    // not better, than a sample that reflects how lopsided their archive
+    // actually is. So the cap yields: whatever is left is handed out again
+    // with the ceiling lifted.
+    if (left > 0) fill(Infinity);
+    return quota;
   }
 
   // The year a caption was written, as a string, or '' when the record carried
@@ -800,6 +849,10 @@
       { shown: digest.mostEngagedWith.length, available: countOf(signals.commentedOn) };
 
     if (opts.includeMessages && messages.total) {
+      // Filled by sampleMessages as it goes — how many conversations it drew
+      // from and how many it had to choose between. Read a few lines below,
+      // once the object literal that triggers the call has been built.
+      const dmStats = {};
       digest.directMessages = {
         threads: messages.threads,
         groupThreads: messages.groupThreads,
@@ -816,31 +869,41 @@
         sentByUser: messages.sent,
         receivedByUser: messages.received,
         averageSentLength: messages.avgSentLength,
-        note: 'Only the user\'s own messages are sampled below. The other side of every conversation was counted and discarded.',
+        note: 'Only the user\'s own messages are sampled below. The other side of every conversation was counted and discarded. '
+          + 'A [t1]…[t10] tag marks which conversation a message belongs to, ranked by how much the user writes in it — t1 is the one they use most. '
+          + 'The tags identify nobody; they are there so that how the user writes to one person can be told apart from how they write to another.',
         // Links stripped before sampling. A shared Grab ride-tracking link or
         // a maps URL is not something to reason about, and it costs the same
         // per character as a sentence does: 44 of 1,000 messages in a real
         // export carried one, at 6,400 characters between them. What surrounds
         // a link is the evidence, so the message is kept and the URL is not.
         ownMessageSample: sampleMessages(
-          // Tolerant of both shapes: instagram.js now sends `{text, ts}`, and
-          // a bare string is still what a hand-built fixture passes.
+          // Tolerant of both shapes: instagram.js now sends `{text, ts, thread}`,
+          // and a bare string is still what a hand-built fixture passes.
           messages.ownTexts.map(m => (m && typeof m === 'object'
             ? { ...m, text: stripLinks(m.text) }
             : stripLinks(m))),
           {
             limit: LIMITS.messages,
-            recent: LIMITS.messagesRecent,
-            older: LIMITS.messagesOlder,
-            longest: LIMITS.messagesLongest,
-            random: LIMITS.messagesRandom,
+            topThreads: LIMITS.messageTopThreads,
+            threadCap: LIMITS.messageThreadCap,
+            recentShare: LIMITS.messageRecentShare,
             maxChars: LIMITS.messageMaxChars,
             minChars: LIMITS.messageChars,
+            stats: dmStats,
           }),
       };
+      // `available` still counts every message they sent, so the fraction the
+      // confidence guidance reads — "300 of 9,741" — keeps meaning what it
+      // meant. The thread numbers are additional rather than a replacement:
+      // without them the model cannot tell a sample drawn from ten
+      // conversations from one drawn across four hundred, and those support
+      // very different claims about somebody's relationships.
       digest.coverage.sampling.ownMessages = {
         shown: digest.directMessages.ownMessageSample.length,
         available: messages.ownTexts.length,
+        fromThreads: dmStats.threadsUsed || 0,
+        ofThreads: dmStats.threadsAvailable || 0,
       };
     }
 

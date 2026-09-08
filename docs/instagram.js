@@ -375,6 +375,14 @@
       // second: it includes message requests, one-off DMs from strangers and
       // group chats somebody was added to and never opened.
       const bySender = new Map();
+      // Which conversation a message belongs to, as a bare integer. The digest
+      // samples per thread now — the top ten by volume, proportionally — and
+      // cannot do that from a flat pool of text. An index rather than a name
+      // deliberately: it is enough to group messages and rank conversations,
+      // and it carries nothing about who the other person is. `threadSenders`
+      // below is still discarded at the end of summariseMessages for exactly
+      // that reason, and nothing added here changes what leaves this file.
+      const threadIndex = out.threadSenders.length;
       out.threadSenders.push({ group: participants.length > 2, bySender });
       for (const msg of messages) {
         const sender = fixText(msg && msg.sender_name);
@@ -391,7 +399,7 @@
         // into "take the last half of the file", the model got no year prefix
         // on a message where a caption gets one, and whole conversations were
         // in or out of the sample by where they happened to sit in the ZIP.
-        if (content) out.messageTexts.push({ sender, text: content, ts });
+        if (content) out.messageTexts.push({ sender, text: content, ts, thread: threadIndex });
       }
     },
   };
@@ -463,8 +471,10 @@
     }
     if (owner) {
       for (const m of signals.messageTexts) {
-        // Dated, so digest.js can sample by time the way it does for captions.
-        if (m.sender === owner) ownTexts.push({ text: m.text, ts: m.ts });
+        // Dated, so digest.js can sample by time the way it does for captions,
+        // and threaded, so it can sample by conversation rather than from one
+        // undifferentiated pile.
+        if (m.sender === owner) ownTexts.push({ text: m.text, ts: m.ts, thread: m.thread });
       }
     }
     // How many conversations they actually took part in, as opposed to how
