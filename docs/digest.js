@@ -28,29 +28,32 @@
     // The floor a message must clear to take one of those 300 places — see
     // sampleMessages for why this is a quality number and not a size one.
     //
-    // Fifty, raised from fifteen, and the trade is worth stating because it is
-    // not free. Against a real archive this is *above* the reader's own mean
-    // sent length of 37 characters, so it excludes the majority of what they
-    // actually write and keeps the more considered end of it. The pool is
-    // still far larger than the 300 places — thousands of messages clear it —
-    // so the cap goes on binding and the buckets go on choosing.
+    // Forty, raised from fifteen, and the trade is worth stating because it is
+    // not free. Against a real archive this sits just above the reader's own
+    // mean sent length of 37 characters, so it keeps the more considered end
+    // of their writing and drops most of the arranging. The pool is still far
+    // larger than the 300 places — thousands of messages clear it — so the cap
+    // goes on binding and the buckets go on choosing.
     //
     // What it buys: fewer places spent on "Ok seeya there at tomo!" and more
-    // on messages that carry a thought. What it costs: the sample now shows
-    // this person at their most expansive rather than at their most typical,
-    // and a few real things go with the filler — "I probably think can buy US
-    // stocks on dips!!" is 44 characters. The counter-fact survives in
-    // `averageSentLength`, which is measured over every message they ever sent
-    // rather than over this sample, so a model reading both can still see that
-    // they mostly write briefly.
-    messageChars: 50,
-    // And the ceiling on one message. Raised from 240, where it was cutting
-    // off the messages most worth having: 40 of 1,000 in a real export sat at
-    // that cap, and they are the apologies, the explanations and the plans —
-    // the ones where somebody is actually saying something rather than
-    // arranging a time. Cheap, because only 4% of messages reach it: p90 was
-    // 167 characters and p95 was 213.
-    messageMaxChars: 2000,
+    // on messages that carry a thought. What it costs: the sample leans to
+    // their more expansive messages rather than their most typical ones. Forty
+    // rather than fifty because it keeps the short-but-real ones — "I probably
+    // think can buy US stocks on dips!!" is 44 characters, an actual view — at
+    // the price of a few more arrangements. The counter-fact survives either
+    // way in `averageSentLength`, which is measured over every message they
+    // ever sent rather than over this sample, so a model reading both can see
+    // that they mostly write briefly.
+    messageChars: 40,
+    // And the ceiling on one message, past which it is truncated rather than
+    // dropped: the opening 600 characters of a long message carry the point,
+    // and the remainder is usually the same point continuing. 600 rather than
+    // the 2000 it briefly was, because a handful of very long messages were
+    // taking the space of several ordinary ones — p90 in a real export was 167
+    // characters and p95 was 213, so this cuts about 1% of messages and none
+    // of them at the start. Selection is made on the *full* length, so the
+    // longest bucket still means longest; only the text shown is clipped.
+    messageMaxChars: 600,
     likedAuthors: 240,
     savedAuthors: 120,
     searches: 160,
@@ -456,12 +459,19 @@
     const seen = new Set();
     for (const item of texts) {
       const dated = Boolean(item) && typeof item === 'object';
-      const value = trim(dated ? item.text : item, maxChars);
-      if (value.length < floor || seen.has(value)) continue;
+      // Measured whole, shown clipped, and the order matters. The buckets rank
+      // on `len`, so measuring after the ceiling would give every message past
+      // it the same length as every other, and "the 75 longest" would collapse
+      // into whichever of the tied ones the sort reached first. It would also
+      // pull the quartile boundaries below in, since a clipped tail piles up
+      // at the top of the distribution instead of spreading out.
+      const full = trim(dated ? item.text : item, Infinity);
+      const value = full.length > maxChars ? full.slice(0, maxChars) + '…' : full;
+      if (full.length < floor || seen.has(value)) continue;
       seen.add(value);
       const ts = dated && Number.isFinite(item.ts) && item.ts > 0 ? item.ts : 0;
       const year = dated ? yearOf(item.ts) : '';
-      cleaned.push({ ts, len: value.length, display: year ? '[' + year + '] ' + value : value });
+      cleaned.push({ ts, len: full.length, display: year ? '[' + year + '] ' + value : value });
     }
     cleaned.sort((a, b) => a.ts - b.ts);
     if (cleaned.length <= opts.limit) return cleaned.map(c => c.display);

@@ -3314,14 +3314,14 @@ check('but the count it was read for still is',
   const text = short.directMessages.ownMessageSample.join(' | ');
   check('messages under the floor do not take a place in the sample',
     !/Handsum|Hahahaha wtf|You going ah/.test(text), text);
-  // The floor is fifty, not fifteen, and the difference is a judgement rather
-  // than a rounding: fifty sits above this reader's own mean sent length of
-  // 37 characters, so it keeps the considered end of their writing and
-  // excludes the majority of it. Pinned to the number rather than left to
+  // The floor is forty, not fifteen, and the difference is a judgement rather
+  // than a rounding: forty sits just above this reader's own mean sent length
+  // of 37 characters, so it keeps the considered end of their writing and
+  // drops most of the arranging. Pinned to the number rather than left to
   // whatever the constant happens to say, because moving it silently changes
   // which version of somebody the report describes.
-  check('and the floor is the considered one, well above a typical message',
-    Digest.LIMITS.messageChars === 50, String(Digest.LIMITS.messageChars));
+  check('and the floor is the considered one, just above a typical message',
+    Digest.LIMITS.messageChars === 40, String(Digest.LIMITS.messageChars));
   check('a message of ordinary length for this person is below it',
     Digest.LIMITS.messageChars > short.directMessages.averageSentLength,
     Digest.LIMITS.messageChars + ' vs mean ' + short.directMessages.averageSentLength);
@@ -3341,6 +3341,68 @@ check('but the count it was read for still is',
   check('captions keep their own lower floor, which the message one must not reach',
     JSON.stringify(shortCaps.samples.captions).includes('very jialat'),
     JSON.stringify(shortCaps.samples.captions));
+}
+
+// ---------- the ceiling on a message ----------
+//
+// A long message is truncated, not dropped: the opening 600 characters carry
+// the point and the rest is usually the same point continuing, so clipping it
+// costs less than losing the message. The number matters a second time over,
+// because the length a message is *measured* at is also what decides which
+// bucket it lands in, and those are not the same length once the ceiling bites.
+{
+  const DAY = 86400;
+  const MONTH18 = 18 * 30 * DAY;
+  const now = Math.floor(Date.parse('2026-06-01T00:00:00Z') / 1000);
+  const ownTexts = [];
+  // Recent enough to fill the recent bucket on its own, so that everything the
+  // longest bucket picks below is drawn from the older messages.
+  for (let i = 0; i < 200; i++) {
+    ownTexts.push({ text: 'R' + i + ' ' + 'r'.repeat(120), ts: now - i * DAY });
+  }
+  // Older than the window. Filler for the middle bucket to draw on, then two
+  // sets that both run past the ceiling: S is barely over it and sits earlier
+  // in time, L is far over it and sits later.
+  for (let i = 0; i < 200; i++) {
+    ownTexts.push({ text: 'F' + i + ' ' + 'f'.repeat(150), ts: now - MONTH18 - (400 + i) * DAY });
+  }
+  for (let i = 0; i < 75; i++) {
+    ownTexts.push({ text: 'S' + i + ' ' + 's'.repeat(620), ts: now - MONTH18 - (2000 + i) * DAY });
+  }
+  for (let i = 0; i < 75; i++) {
+    ownTexts.push({
+      text: 'L' + i + ' ' + 'l'.repeat(1900) + ' ENDOFLONG',
+      ts: now - MONTH18 - (1000 + i) * DAY,
+    });
+  }
+  const capped = Digest.build({
+    ...signals,
+    messages: {
+      total: 1100, threads: 5, groupThreads: 0, sent: 550, received: 550,
+      avgSentLength: 180, ownTexts,
+    },
+  }, { includeMessages: true });
+  const bodies = capped.directMessages.ownMessageSample
+    .map(line => line.replace(/^\[\d{4}\] /, ''));
+  const longs = bodies.filter(b => /^L\d+ /.test(b));
+
+  check('the ceiling on one message is 600 characters',
+    Digest.LIMITS.messageMaxChars === 600, String(Digest.LIMITS.messageMaxChars));
+  check('a message past the ceiling is clipped rather than dropped',
+    longs.length > 0 && longs.every(b => b.length === 601 && b.endsWith('…')),
+    longs.length + ' kept, first is ' + (longs[0] || '').length + ' chars');
+  check('and the clipped tail is genuinely gone',
+    !bodies.some(b => b.includes('ENDOFLONG')));
+  // The discriminating one, and the reason the fixture has two oversized sets
+  // rather than one. Measured after clipping they are the same length, so the
+  // longest bucket fills with whichever the sort reaches first — the S set,
+  // being older and therefore earlier in the chronological order the sort is
+  // stable against — and the genuinely long messages lose their own bucket.
+  // Measured whole, L wins on its merits, which is what "longest" has to mean
+  // for the bucket to be worth having.
+  check('the longest bucket ranks on the real length, not the clipped one',
+    longs.length === Digest.LIMITS.messagesLongest,
+    longs.length + ' of ' + Digest.LIMITS.messagesLongest);
 }
 
 // Links in the reader's own messages. A shared ride-tracking link is not
