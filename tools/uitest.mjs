@@ -5062,6 +5062,19 @@ try {
     Boolean(roastBadge) && roastBadge.isBonus && roastBadge.colour !== roastBadge.paidColour,
     JSON.stringify(roastBadge && { colour: roastBadge.colour, paid: roastBadge.paidColour }));
 
+  // The coverage line under the confidence score. It is what makes the number
+  // checkable: a reader told "88/100, comprehensive fourteen-year archive" has
+  // no way to know the model saw 3% of the messages, and "300 of 9,741 own
+  // messages" says it plainly. Generated on every run, so if it renders
+  // nowhere it is a field paid for and never seen.
+  check('the confidence score shows what it was read from',
+    /Read from/i.test(profileText), profileText.slice(0, 160));
+  check('and lists the coverage the model scored against',
+    await page.evaluate(() => {
+      const card = document.querySelector('#profile-body .confidence-card');
+      return Boolean(card) && /of \d+ captions/i.test(card.innerText);
+    }));
+
   // The strengths line under the attachment style name, on screen rather than
   // only in the schema. It carries the whole tone of that section: the four
   // style names arrive loaded, and somebody just told they lean anxious or

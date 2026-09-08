@@ -3814,6 +3814,17 @@
       '<div class="confidence-meter"><div class="confidence-fill" data-fill="' + Math.round(report.confidence.score) + '"></div></div>' +
       '<p><strong>' + esc(TEXT.trustScore) + Math.round(report.confidence.score) + '/100 (' + esc(report.confidence.level) + ').</strong> ' +
       esc(report.confidence.rationale) + '</p>' +
+      // What the score was read off, beside the score. This is what makes the
+      // number checkable rather than asserted: a reader who is told "88/100,
+      // comprehensive fourteen-year archive" has no way to know the model saw
+      // 3% of the messages, and "300 of 9,741 own messages" says it plainly.
+      // Optional, so a report generated before this field existed still
+      // renders — the same reason attachment.styleTone is.
+      ((report.confidence.basedOn || []).length
+        ? '<p class="essence-label">' + esc(TEXT.confidenceBasedOn) + '</p>' +
+          '<p class="trait-evidence">' + report.confidence.basedOn
+            .map(item => '<span class="ev">' + esc(item) + '</span>').join('') + '</p>'
+        : '') +
       (sample ? '' : sourcesUsedHtml()) +
       '</div>';
 

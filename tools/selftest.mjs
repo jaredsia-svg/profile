@@ -3075,6 +3075,95 @@ check('but the count it was read for still is',
     JSON.stringify(withGoogle.google).slice(0, 200));
 }
 
+// ---------- confidence is scored on what was shown, not what exists ----------
+//
+// A real report opened "Confidence: 88/100 (high). Comprehensive fourteen-year
+// archive spanning over 24,000 direct messages, 86,000 Google searches, 11,000
+// YouTube view records" — having been shown 3% of the messages, 1.3% of the
+// video titles and 150 search terms. Every figure it cited as evidence of
+// comprehensiveness was a total it had never read.
+//
+// Two causes, and both are fixed here. The digest gave the model no
+// denominator for its ranked lists, so a list of 150 search terms beside a
+// count of 87,000 searches was unreadable. And the prompt told it "the counts
+// and histograms are always complete", which is true of `counts` and `rhythm`
+// and false of every `topKeys` list in the file — they are the top N of
+// however many there were.
+{
+  // Messages supplied explicitly: the base fixture is parsed without them, so
+  // a digest built from it alone carries no message block to report coverage
+  // for — and this block is largely about the message block.
+  const covered = Digest.build({
+    ...signals,
+    supplements: { google },
+    messages: {
+      total: 900, threads: 12, groupThreads: 1, sent: 500, received: 400, avgSentLength: 60,
+      ownTexts: Array.from({ length: 500 }, (_, i) => ({
+        text: 'A message of ordinary length for coverage purposes, number ' + i,
+        ts: 1700000000 + i * 3600,
+      })),
+    },
+  }, { includeMessages: true });
+  const sampling = covered.coverage.sampling;
+
+  // Every ranked list the model is shown needs a denominator, or it cannot
+  // tell the head of a long tail from the whole of a short one.
+  for (const key of ['topics', 'likedAccounts', 'savedAccounts', 'engagedWith',
+    'googleSearchTerms', 'youtubeSearchTerms', 'youtubeChannels', 'browsedDomains']) {
+    check('coverage names what was shown of ' + key,
+      sampling[key] && Number.isFinite(sampling[key].shown) &&
+      Number.isFinite(sampling[key].available) &&
+      sampling[key].available >= sampling[key].shown,
+      JSON.stringify(sampling[key]));
+  }
+  // `available` counts distinct entries, not raw records: the honest question
+  // about a list of search terms is how many different things were searched
+  // for, not how many times somebody searched.
+  // Null-safe rather than trusting the entry above to exist. Removing the line
+  // that writes it should surface as this check failing, not as a TypeError
+  // that kills the run before any of the failures can be reported — which is
+  // what it did the first time it was injected.
+  const terms = sampling.googleSearchTerms || {};
+  check('and counts distinct entries rather than raw records',
+    terms.available === google.googleSearchTerms.size &&
+    terms.available < covered.google.counts.googleSearches,
+    JSON.stringify([terms.available, google.googleSearchTerms.size,
+      covered.google.counts.googleSearches]));
+  // The sampled text keeps its own, which is where the worst of the gap is.
+  check('and the message sample reports how small a slice it is',
+    sampling.ownMessages.shown <= Digest.LIMITS.messages &&
+    sampling.ownMessages.available > sampling.ownMessages.shown,
+    JSON.stringify(sampling.ownMessages));
+
+  // The prompt. The old text made a claim that was flatly untrue of the
+  // ranked lists and licensed exactly the score above.
+  const sys = prompts.PROFILE_SYSTEM;
+  check('the prompt no longer claims every histogram is complete',
+    !/counts and histograms\s+are always complete/i.test(sys));
+  check('it separates complete from truncated from sampled',
+    /\*\*Complete\*\*/.test(sys) && /\*\*Truncated\*\*/.test(sys) && /\*\*Sampled\*\*/.test(sys));
+  check('it names the failure by its actual shape, not in the abstract',
+    /a total it had never read|never been shown/i.test(sys) &&
+    /A large archive you saw a sliver of is not strong evidence/i.test(sys));
+  check('and forbids citing a total as coverage',
+    /Never cite a total as though it were coverage/i.test(sys));
+  // Confidence gets its own section rather than a paragraph inside the
+  // extraversion correction, which is where this guidance used to live.
+  check('confidence has a section of its own',
+    /## Confidence — score what you were shown/.test(sys));
+
+  // The schema field that makes the number checkable, and its renderer. A
+  // field generated on every run and shown to nobody is the quiet way this
+  // kind of addition fails.
+  const conf = prompts.PROFILE_SCHEMA.properties.confidence.properties;
+  check('the schema asks the model to show the coverage it scored from',
+    Boolean(conf.basedOn) && /coverage\.sampling/.test(conf.basedOn.description));
+  check('and the rationale is told which number is a fact about the evidence',
+    /how many you read is a fact about your evidence/i.test(conf.rationale.description));
+  check('and it is rendered beside the score rather than only asked for',
+    /confidence\.basedOn/.test(readFileSync(join(root, 'docs', 'app.js'), 'utf8')));
+}
+
 // ---------- messages are dated, and sampled in three buckets ----------
 //
 // instagram.js computed a timestamp for every message and put it only into the

@@ -386,6 +386,10 @@
     // is, not a second title competing with the one it sits next to. Shared
     // by all four paid sections: see `PAID_SECTIONS` in docs/app.js, which
     // applies it uniformly.
+    // Labels the coverage line under the confidence score. "Read from" rather
+    // than "based on": the point is what the model actually had in front of
+    // it, which is the distinction the score itself was getting wrong.
+    confidenceBasedOn: 'Read from',
     premiumBadge: 'Premium',
     // The roast's counterpart to that badge. It marks the section the same way
     // — a word in the heading saying what kind of thing this is — but says

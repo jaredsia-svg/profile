@@ -209,7 +209,10 @@
   // carried so an ordinary edit does not immediately invalidate it. The check
   // in tools/selftest.mjs caught the overrun the run it happened, which is the
   // whole reason it exists.
-  const FIXED_INPUT_TOKENS = 21600;
+  // Raised to 22,600 for the Confidence section, which is prose that pays for
+  // itself: the model was scoring 88/100 off totals it had never been shown.
+  // Measured at 22,378.
+  const FIXED_INPUT_TOKENS = 22600;
 
   // lib/gemini.js caps generation here, so this is the most output — visible
   // report plus thinking — that a single call can possibly bill for. Held to
@@ -497,6 +500,14 @@
   // Follows are sampled evenly across the whole list rather than taking the
   // first N — the export is roughly chronological, so the head is whoever they
   // followed years ago.
+  // How many distinct entries a counting Map or list holds, which is the
+  // denominator a ranked list needs and does not otherwise carry.
+  function countOf(source) {
+    if (!source) return 0;
+    if (typeof source.size === 'number') return source.size;
+    return Array.isArray(source) ? source.length : 0;
+  }
+
   function sampleEvenly(items, limit) {
     if (items.length <= limit) return items.slice();
     const step = items.length / limit;
@@ -716,6 +727,22 @@
     digest.coverage.sampling.captions.shown = digest.samples.captions.length;
     digest.coverage.sampling.comments.shown = digest.samples.comments.length;
     digest.coverage.sampling.searches.shown = digest.samples.searches.length;
+    // The ranked lists, which are truncated rather than complete — the top N
+    // of however many distinct entries there were. Without these the model has
+    // a list of 150 search terms, a count of 87,000 searches, and no way at
+    // all to tell whether it is looking at most of somebody's interests or a
+    // thin slice of them. It guessed generously: a real report opened
+    // "Confidence 88/100. Comprehensive fourteen-year archive spanning 24,000
+    // direct messages, 86,000 Google searches" — every one of those numbers a
+    // total it had never been shown.
+    digest.coverage.sampling.topics =
+      { shown: digest.instagramTopics.length, available: signals.topics.length };
+    digest.coverage.sampling.likedAccounts =
+      { shown: digest.mostLikedAccounts.length, available: countOf(signals.likedAuthors) };
+    digest.coverage.sampling.savedAccounts =
+      { shown: digest.mostSavedAccounts.length, available: countOf(signals.savedAuthors) };
+    digest.coverage.sampling.engagedWith =
+      { shown: digest.mostEngagedWith.length, available: countOf(signals.commentedOn) };
 
     if (opts.includeMessages && messages.total) {
       digest.directMessages = {
@@ -1004,6 +1031,22 @@
       };
       digest.coverage.sampling.youtubeTitles = {
         shown: digest.google.videoTitleSample.length, available: g.counts.watched,
+      };
+      // The four ranked lists, with their real denominators. `available` is
+      // distinct entries rather than raw records: the honest question about a
+      // list of 150 search terms is how many different things were searched
+      // for, not how many times.
+      digest.coverage.sampling.googleSearchTerms = {
+        shown: digest.google.topGoogleSearches.length, available: countOf(g.googleSearchTerms),
+      };
+      digest.coverage.sampling.youtubeSearchTerms = {
+        shown: digest.google.topYoutubeSearches.length, available: countOf(g.youtubeSearchTerms),
+      };
+      digest.coverage.sampling.youtubeChannels = {
+        shown: digest.google.topChannels.length, available: countOf(g.channels),
+      };
+      digest.coverage.sampling.browsedDomains = {
+        shown: digest.google.topDomains.length, available: countOf(g.domains),
       };
       digest.coverage.sampling.geminiPrompts = {
         shown: digest.google.geminiPromptSample.length, available: g.counts.prompts,

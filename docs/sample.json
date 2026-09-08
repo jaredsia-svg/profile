@@ -3,7 +3,12 @@
   "confidence": {
     "score": 86,
     "level": "high",
-    "rationale": "Four years of steady, well-dated posting, and captions long enough to read tone from rather than guess at — that is about as much as an export gives. Beliefs and attachment are the thinner end: you write warmly but rarely about yourself, so those two lean on indirect evidence while everything above them rests on behaviour that repeats."
+    "rationale": "Four years of steady, well-dated posting, and captions long enough to read tone from rather than guess at — that is about as much as an export gives. Beliefs and attachment are the thinner end: you write warmly but rarely about yourself, so those two lean on indirect evidence while everything above them rests on behaviour that repeats.",
+    "basedOn": [
+      "1,204 of 1,204 captions",
+      "318 of 2,940 own messages",
+      "complete hour-of-day and month-by-month histograms"
+    ]
   },
   "essence": {
     "character": "Mulan",
