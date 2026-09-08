@@ -2867,19 +2867,14 @@ check('and is not also poured into the caption pool',
   !digest.samples.captions.some(c => /Trail runner/.test(c)),
   JSON.stringify(digest.samples.captions.filter(c => /Trail runner/.test(c))));
 
-// What kind of thing each caption was, end to end through the real archive.
-// The per-kind checks further down build their own records with a `kind` on
-// each, so they pass with the parser's half of the wiring deleted — the same
-// gap the thread tags had. This is the check that fails when it is.
-{
-  const kinds = digest.samples.captions
-    .map(c => (/^\[\d{4}\] \[(\w+)\] /.exec(c) || [])[1]).filter(Boolean);
-  check('a caption parsed from a real archive reaches the digest labelled',
-    kinds.length === digest.samples.captions.length && kinds.length > 0,
-    kinds.length + ' of ' + digest.samples.captions.length);
-  check('and the fixture\'s posts, stories and reels are told apart',
-    new Set(kinds).size >= 2, JSON.stringify([...new Set(kinds)]));
-}
+// A caption carries its year and nothing else. A [post]/[story]/[reel] tag was
+// tried and removed: against a real archive of 623 stories and 20 posts every
+// sampled line came back [story], so it was 2,700 characters restating one
+// fact. This is the check that fails if one is reintroduced without the
+// measurement that would justify it.
+check('a caption carries its year and no other tag',
+  digest.samples.captions.every(c => /^\[\d{4}\] [^[]/.test(c)),
+  digest.samples.captions.find(c => !/^\[\d{4}\] [^[]/.test(c)));
 check('the years are real ones off the fixture, not a constant',
   new Set(datedCaptions.map(c => c.slice(1, 5))).size > 1,
   [...new Set(datedCaptions.map(c => c.slice(1, 5)))].sort().join(','));
@@ -3124,9 +3119,17 @@ check('the sample arrives in chronological order',
       ts: base + (400 + i) * HOUR, kind: 'post' });
   }
   const got = Digest.build({ ...signals, captions }, { includeMessages: false }).samples.captions;
-  const bodies = got.map(line => line.replace(/^\[\d{4}\] \[\w+\] /, ''));
+  const bodies = got.map(line => line.replace(/^\[\d{4}\] /, ''));
   const longs = bodies.filter(b => /^L\d+ /.test(b));
 
+  // Pinned to the number, not left to whatever the constant says, because the
+  // ceiling is a judgement about how much of a long caption is worth reading
+  // and the check below reads the constant and so passes at any value. Six
+  // hundred after a real archive showed eleven of 343 captions sitting at a
+  // four-hundred cap, cut mid-sentence, and reading them they were the
+  // reflective ones rather than the rambling ones.
+  check('the ceiling on one caption is 600 characters',
+    Digest.LIMITS.captionMaxChars === 600, String(Digest.LIMITS.captionMaxChars));
   check('a caption past the ceiling is clipped rather than dropped',
     longs.length > 0 && longs.every(b => b.length === Digest.LIMITS.captionMaxChars + 1 &&
       b.endsWith('…')),
@@ -3141,67 +3144,6 @@ check('the sample arrives in chronological order',
     longs.length === 200, longs.length + ' of 200');
 }
 
-// ---------- captions: what kind of thing each one was ----------
-//
-// Four sources were being poured into one list with nothing to tell them
-// apart. A story overlay is a place name thrown up for a day; a caption is a
-// considered public statement. Pooled, a difference in register between them
-// is invisible, and it is one of the more revealing things in an archive.
-{
-  const DAY = 86400;
-  const captions = [];
-  for (let i = 0; i < 200; i++) {
-    captions.push({ text: 'A considered public caption, number ' + i + ', written at length.',
-      ts: Date.UTC(2024, 0, 1) / 1000 + i * DAY, kind: 'post' });
-    captions.push({ text: 'A story overlay that still clears the floor, ' + i,
-      ts: Date.UTC(2024, 0, 1) / 1000 + i * DAY + 60, kind: 'story' });
-    captions.push({ text: 'A reel title long enough to be worth a place, ' + i,
-      ts: Date.UTC(2024, 0, 1) / 1000 + i * DAY + 120, kind: 'reel' });
-  }
-  const got = Digest.build({ ...signals, captions }, { includeMessages: false }).samples.captions;
-  const kinds = got.map(line => (/^\[\d{4}\] \[(\w+)\] /.exec(line) || [])[1]);
-  check('every caption says what kind of thing it was',
-    kinds.every(Boolean), got.find((_, i) => !kinds[i]));
-  check('and all three kinds reach the sample rather than one crowding the rest',
-    new Set(kinds).size === 3, JSON.stringify([...new Set(kinds)]));
-  // The tag has to follow the record, not the position. Every third caption is
-  // a story, so a tag applied by index would still produce three kinds in the
-  // right proportions and mean nothing.
-  const mismatched = got.filter(line =>
-    (/\[post\] /.test(line) && !/considered public caption/.test(line)) ||
-    (/\[story\] /.test(line) && !/story overlay/.test(line)) ||
-    (/\[reel\] /.test(line) && !/reel title/.test(line)));
-  check('and the tag names what the caption actually is',
-    mismatched.length === 0, JSON.stringify(mismatched.slice(0, 3)));
-}
-
-// A record with no usable timestamp is emitted bare rather than guessed at —
-// the bio is the real instance of this, since it is current by definition and
-// carries no date of its own.
-check('an undated caption comes through without a year rather than a wrong one',
-  Digest.build({ ...signals, captions: [{ text: 'a caption with no timestamp at all', ts: 0 }] },
-    { includeMessages: false }).samples.captions[0] === 'a caption with no timestamp at all');
-// Epoch-zero and far-future stamps turn up in real exports; neither is a year.
-check('a nonsense timestamp is treated as undated, not as 1970',
-  Digest.build({ ...signals,
-    captions: [{ text: 'stamped at the epoch itself, and long enough to clear the floor', ts: 1 }] },
-    { includeMessages: false }).samples.captions[0] ===
-      'stamped at the epoch itself, and long enough to clear the floor');
-check('digest samples comments', digest.samples.comments.length > 0);
-check('digest carries the hour histogram', digest.rhythm.hourOfDay.length === 24);
-check('digest carries the weekday histogram', digest.rhythm.dayOfWeek.length === 7);
-check('digest explains its histogram indexing', /0=Sunday/.test(digest.rhythm.note));
-check('digest measures posting regularity', typeof digest.rhythm.regularity === 'number');
-// The raw follow list is no longer sent — 637 opaque handles like
-// "ne_nay101144" cost 4.6% of a real digest and said almost nothing, which the
-// comment beside instagramTopics had already noticed. The *count* stays,
-// because that is what the prompt actually reasons from: "a person following
-// six hundred accounts and engaging with forty is paying for a subscription
-// they stopped reading" needs the six hundred, not the six hundred names.
-check('the raw follow list is not sent', digest.following === undefined);
-check('but the count it was read for still is',
-  digest.counts.following === signals.following.length,
-  digest.counts.following + ' vs ' + signals.following.length);
 // ---------- My Activity titles, cleaned ----------
 //
 // Every row arrives as a sentence — "Watched Conan O'Brien interviews
@@ -3419,10 +3361,19 @@ check('but the count it was read for still is',
   check('the prompt describes the per-year caption sampling actually used',
     /square root\*? of each year's volume/.test(sys) &&
     /no year takes more than a quarter/.test(sys));
-  check('and names the three kinds a caption can be',
-    /`\[post\]`, `\[story\]` and `\[reel\]`/.test(sys));
-  check('and tells the model a difference between them is a finding',
-    /A difference in register between them is a finding/.test(sys));
+  // And says nothing about tags the digest no longer emits. A prompt that
+  // describes a field the sampler stopped producing is worse than one that
+  // says nothing: it tells the model to look for a distinction, find none, and
+  // draw a conclusion from the absence. The pair of checks that used to sit
+  // here pinned the [post]/[story]/[reel] paragraph, and they went on passing
+  // after the tag was removed — they only ever asserted that the prompt said
+  // it, never that the digest did it. Hence this, which is the other half.
+  check('and does not describe caption tags the sampler no longer emits',
+    !/\[story\]/.test(sys) && !/\[reel\]/.test(sys),
+    (/.{0,80}\[story\].{0,80}/.exec(sys) || [''])[0]);
+  check('and the digest agrees, carrying a year on a caption and nothing else',
+    Digest.build({ ...signals }, { includeMessages: false }).samples.captions
+      .every(c => /^\[\d{4}\] [^[]/.test(c)));
   check('and warns that a flattened sample is not evidence of flat posting',
     /not evidence they posted similarly in both/.test(sys));
 

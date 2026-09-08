@@ -93,12 +93,13 @@
     topics: 400,
     adInterests: 400,
     // The ceiling on one caption, past which it is clipped rather than
-    // dropped. 400 rather than the 600 it was: a 400-character caption is
-    // already several paragraphs, and on a measured archive the reduction pays
-    // for the whole year-by-year redistribution — it costs only the tail of
-    // the longest captions and leaves the median and the upper quartile of the
-    // sample untouched.
-    captionMaxChars: 400,
+    // dropped. Set to 400 for a while, on the reasoning that a 400-character
+    // caption is already several paragraphs. Back to 600 because the reasoning
+    // did not survive a real archive: eleven of 343 captions sat at the cap,
+    // and reading them they are the reflective ones — a story about a cave, a
+    // passage from a book somebody was moved by — cut mid-sentence. Eleven
+    // tails cost about 2,200 characters, which is 1.5% of that digest.
+    captionMaxChars: 600,
     // Supplementary sources. Sized so both together add roughly 100,000 chars
     // — about $0.04 of input against a run whose realistic total is $0.20 —
     // and every one of them is a cap on an *aggregate*, never on a raw list.
@@ -471,12 +472,12 @@
   // same corpus that moves the first seven years from 54 places to about 159
   // and the newest year from 239 to about 75, for a few per cent of size.
   //
-  // Each line is tagged with what it was — [post], [story], [reel]. The four
-  // sources were being poured into one list with nothing to tell them apart,
-  // and they are different acts: a story overlay is a place name thrown up for
-  // a day, a caption is a considered public statement. A difference in
-  // register between them is a finding about how somebody presents themselves,
-  // and until now it was not visible at all.
+  // Lines carry their year and nothing else. A [post]/[story]/[reel] tag was
+  // tried and taken out again: measured against a real archive of 623 stories
+  // and 20 posts, every one of the 343 sampled captions came back tagged
+  // [story], so the tag was 2,700 characters spent restating one fact. The
+  // register difference it was meant to expose only exists on an account that
+  // posts in more than one form, and the cost is paid by every account.
   function sampleCaptions(texts, opts) {
     const cleaned = [];
     const seen = new Set();
@@ -494,8 +495,7 @@
       seen.add(value);
       const ts = dated && Number.isFinite(item.ts) && item.ts > 0 ? item.ts : 0;
       const year = dated ? yearOf(item.ts) : '';
-      const kind = dated && typeof item.kind === 'string' ? item.kind : '';
-      cleaned.push({ ts, year, kind, len: full.length, text: value });
+      cleaned.push({ ts, year, len: full.length, text: value });
     }
     cleaned.sort((a, b) => a.ts - b.ts);
     if (!cleaned.length) return [];
@@ -529,9 +529,7 @@
       for (const c of group.filter(m => !picked.has(m)).sort((a, b) => b.len - a.len)
         .slice(0, want - picked.size)) picked.add(c);
       for (const c of group) {
-        if (!picked.has(c)) continue;
-        out.push((c.year ? '[' + c.year + '] ' : '') +
-          (c.kind ? '[' + c.kind + '] ' : '') + c.text);
+        if (picked.has(c)) out.push((c.year ? '[' + c.year + '] ' : '') + c.text);
       }
     });
     return out;

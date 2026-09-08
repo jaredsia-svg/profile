@@ -187,18 +187,12 @@
   // dropped four years ago and one they are in the middle of came through
   // identically. `ts` is seconds, or 0 when the record carried no timestamp;
   // digest.js turns it into a year at sampling time.
-  function addText(out, text, timestamp, kind) {
+  function addText(out, text, timestamp) {
     const clean = fixText(text).trim();
     if (!clean) return;
     if (out.corpusChars >= LIMITS.corpusChars) return;
     out.corpusChars += clean.length;
-    // What kind of thing this was. A story overlay, a reel title and a post
-    // caption are different acts of self-presentation — one is a place name
-    // thrown up for a day, one is a considered public statement — and they
-    // were being poured into one list with nothing to tell them apart. The
-    // digest tags each sampled line with this, so a difference in register
-    // between them can be read as the finding it is rather than as noise.
-    out.captions.push({ text: clean, ts: toSeconds(timestamp) || 0, kind: kind || 'post' });
+    out.captions.push({ text: clean, ts: toSeconds(timestamp) || 0 });
   }
 
   const handlers = {
@@ -212,7 +206,7 @@
         // carry it on the post. Take whichever is longer.
         const caption = [post.title, media[0] && media[0].title]
           .map(t => fixText(t || '')).sort((a, b) => b.length - a.length)[0] || '';
-        addText(out, caption, ts, 'post');
+        addText(out, caption, ts);
         if (media.length > 1) out.counts.carousels++;
         // Only the first still of a carousel is a candidate — it is the frame
         // they chose as the cover, and taking all ten would let one post crowd
@@ -231,7 +225,7 @@
       for (const story of asArray(data, 'ig_stories', 'stories')) {
         pushEvent(out, 'story', story.creation_timestamp);
         out.counts.stories++;
-        addText(out, story.title, story.creation_timestamp, 'story');
+        addText(out, story.title, story.creation_timestamp);
         addMedia(out, 'story', story.uri, story.creation_timestamp,
           fixText(story.title || '').length, 1);
       }
@@ -243,7 +237,7 @@
         pushEvent(out, 'reel', reel.creation_timestamp || first.creation_timestamp);
         out.counts.reels++;
         addText(out, first.title || reel.title,
-          reel.creation_timestamp || first.creation_timestamp, 'reel');
+          reel.creation_timestamp || first.creation_timestamp);
       }
     },
     igtv(out, data) {
@@ -251,7 +245,7 @@
         const media = Array.isArray(item.media) ? item.media : [item];
         pushEvent(out, 'post', (media[0] || {}).creation_timestamp);
         addText(out, (media[0] || {}).title || item.title,
-          (media[0] || {}).creation_timestamp, 'post');
+          (media[0] || {}).creation_timestamp);
       }
     },
     profilePhotos(out, data) {
