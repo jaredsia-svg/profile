@@ -2349,7 +2349,6 @@
     if (!decision.includeActivity) Digest.omitActivity(target);
     if (!decision.includeAccounts) Digest.omitAccounts(target);
     if (!decision.includeTopics) Digest.omitTopics(target);
-    if (!decision.includeSearches) Digest.omitSearches(target);
     if (!decision.includeMessages) Digest.omitMessages(target);
     // Each is a no-op when its block is absent, so a reader who added only
     // Google is unaffected by the Facebook keys being false.
@@ -2357,7 +2356,6 @@
     if (!decision.includeYouTubeSearches) Digest.omitYouTubeSearches(target);
     if (!decision.includeGoogleSearches) Digest.omitGoogleSearches(target);
     if (!decision.includeChrome) Digest.omitChrome(target);
-    if (!decision.includeGeminiPrompts) Digest.omitGeminiPrompts(target);
     if (!decision.includeFacebookPosts) Digest.omitFacebookPosts(target);
     if (!decision.includeFacebookConnections) Digest.omitFacebookConnections(target);
     if (!decision.includeFacebookMessages) Digest.omitFacebookMessages(target);
@@ -2440,7 +2438,6 @@
     const engagedCount = digest.mostLikedAccounts.length + digest.mostSavedAccounts.length +
       digest.mostEngagedWith.length;
     const topicsCount = digest.instagramTopics.length + digest.instagramAdInterests.length;
-    const searchesCount = digest.samples.searches.length;
     const likedCaptionsCount = (digest.samples.likedPostCaptions || []).length;
 
     // One row per checkbox — id, how many there are to send, the on/off
@@ -2481,9 +2478,6 @@
         'Instagram’s own inferred topics', 'Instagram’s own inferred topics — none found',
         digest.instagramTopics.length + ' topics and ' + digest.instagramAdInterests.length +
         ' ad interests Instagram has already guessed about you.'],
-      ['review-searches', 'includeSearches', searchesCount,
-        'Searches', 'Searches — none found',
-        searchesCount + ' search terms, with how often you repeated each.'],
       ['review-dms', 'includeMessages', dmCount,
         'Direct messages', 'Direct messages — none found',
         dmCount ? dmCount + ' of your own messages sampled out of ' + dmTotal + ' total. Only ' +
@@ -2502,7 +2496,6 @@
       const ytSearches = g.topYoutubeSearches.length;
       const gSearches = g.counts.googleSearches;
       const visits = g.counts.visits || 0;
-      const prompts = g.geminiPromptSample.length;
       rows.push(
         ['review-yt-watched', 'includeYouTube', watched,
           'YouTube watch history', 'YouTube watch history — none found',
@@ -2527,10 +2520,6 @@
           visits ? visits + ' visits across ' + (g.counts.distinctDomains || 0) +
             ' different sites, as two numbers. No site name, page, address or time.' :
             'No browsing history was found in this export.'],
-        ['review-gemini', 'includeGeminiPrompts', prompts,
-          'Gemini Apps prompts', 'Gemini Apps prompts — none found',
-          prompts ? prompts + ' of the things you have asked Gemini, in your own words.' :
-            'No Gemini Apps activity was found in this export.'],
       );
     }
 

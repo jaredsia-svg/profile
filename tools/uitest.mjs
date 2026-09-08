@@ -213,14 +213,13 @@ async function answerReview(page, options) {
   if (opts.untickActivity) await page.uncheck('#review-activity');
   if (opts.untickAccounts) await page.uncheck('#review-accounts');
   if (opts.untickTopics) await page.uncheck('#review-topics');
-  if (opts.untickSearches) await page.uncheck('#review-searches');
   if (opts.untickMessages) await page.uncheck('#review-dms');
   // Supplement rows exist only when that source was added, so each is
   // unchecked defensively rather than assumed present.
   for (const [flag, id] of [
     ['untickYouTube', '#review-yt-watched'], ['untickYouTubeSearches', '#review-yt-searches'],
     ['untickGoogleSearches', '#review-google-searches'], ['untickChrome', '#review-chrome'],
-    ['untickGemini', '#review-gemini'], ['untickFacebookPosts', '#review-fb-posts'],
+    ['untickFacebookPosts', '#review-fb-posts'],
     ['untickFacebookFriends', '#review-fb-connections'], ['untickFacebookMessages', '#review-fb-messages'],
   ]) {
     if (opts[flag] && await page.locator(id).count()) await page.uncheck(id);
@@ -3271,16 +3270,15 @@ try {
   // are checkboxes now, so this holds the count directly rather than trusting
   // one row checked below to stand in for the rest.
   //
-  // Seven. Six for a while — Photos was an older seventh and went with the
-  // payload it described — and seven again now that captions on liked posts
-  // are offered separately. That row exists rather than folding into
-  // "Accounts you engage with" because it is the one Instagram row carrying
-  // text somebody else wrote, and a review screen must not send text under a
-  // heading that promises names. This is the count that keeps the
-  // supplementary rows honest: they append to these, so a drift here would
-  // silently move that goalpost.
-  check('all seven review rows are checkboxes, each checked by default',
-    (await page.locator('#review-list input[type="checkbox"]').count()) === 7 &&
+  // Six. The count has moved with the payload every time: Photos was an older
+  // seventh and went when nothing sent images, captions on liked posts added
+  // one, and Instagram's own search list took one away when it stopped being
+  // sent. That row must never outlive the thing it describes — a review screen
+  // offering a switch over data the digest does not carry is the one failure
+  // this screen cannot have. It is also what keeps the supplementary rows
+  // honest: they append to these, so a drift here would move that goalpost.
+  check('all six review rows are checkboxes, each checked by default',
+    (await page.locator('#review-list input[type="checkbox"]').count()) === 6 &&
     (await page.evaluate(() =>
       [...document.querySelectorAll('#review-list input[type="checkbox"]')].every(el => el.checked))));
   check('the icon column is gone — nothing in the list is decorative any more',
@@ -3354,8 +3352,8 @@ try {
   check('the file opens on its own — a real, self-contained HTML document',
     html1.startsWith('<!doctype html>') && !/https?:\/\//.test(html1),
     html1.slice(0, 40));
-  check('the readable table says all seven rows are included, by default',
-    (html1.match(/>Included</g) || []).length === 7 && (html1.match(/>Excluded</g) || []).length === 0,
+  check('the readable table says all six rows are included, by default',
+    (html1.match(/>Included</g) || []).length === 6 && (html1.match(/>Excluded</g) || []).length === 0,
     JSON.stringify({ included: (html1.match(/>Included</g) || []).length,
       excluded: (html1.match(/>Excluded</g) || []).length }));
   const preview1 = extractDigestFromPreviewHtml(html1);
@@ -3400,7 +3398,7 @@ try {
     preview2.samples.captions.length === preview1.samples.captions.length &&
     preview2.samples.comments.length === preview1.samples.comments.length &&
     preview2.mostLikedAccounts.length === preview1.mostLikedAccounts.length &&
-    preview2.samples.searches.length === preview1.samples.searches.length,
+    preview2.samples.likedPostCaptions.length === preview1.samples.likedPostCaptions.length,
     JSON.stringify({ captions: preview2.samples.captions.length,
       liked: preview2.mostLikedAccounts.length }));
   // Downloading must not itself opt anything out — only Send may. Re-ticked
@@ -7404,15 +7402,16 @@ try {
   await chooseDepth(page);
   await page.waitForSelector('#review-dialog[open]', { timeout: 30000 });
 
-  // Eight more rows, and only because both sources were added — a reader who
-  // skipped still sees the original seven, which is asserted on the very first
-  // upload further up and is what keeps that count meaningful.
-  check('adding both sources adds eight rows to the review, not a lumped-together one',
-    (await page.locator('#review-list input[type="checkbox"]').count()) === 15,
+  // Seven more rows, and only because both sources were added — a reader who
+  // skipped still sees the original six, which is asserted on the very first
+  // upload further up and is what keeps that count meaningful. Seven rather
+  // than eight since the Gemini row went with the prompt text it described.
+  check('adding both sources adds seven rows to the review, not a lumped-together one',
+    (await page.locator('#review-list input[type="checkbox"]').count()) === 13,
     (await page.locator('#review-list input[type="checkbox"]').count()) + ' rows');
   const supplementedReview = await page.locator('#review-dialog').innerText();
   for (const label of ['YouTube watch history', 'YouTube searches', 'Google searches',
-    'Chrome browsing history', 'Gemini Apps prompts', 'Facebook posts & comments',
+    'Chrome browsing history', 'Facebook posts & comments',
     'Facebook friends & follows', 'Facebook Messenger']) {
     check('the review names ' + JSON.stringify(label) + ' as its own row',
       supplementedReview.includes(label));
@@ -7482,8 +7481,8 @@ try {
     strippedBody.google.counts.visits === undefined &&
     strippedBody.google.counts.distinctDomains === undefined,
     JSON.stringify(strippedBody.google.counts));
-  check('unticking Gemini empties the prompt sample',
-    strippedBody.google.geminiPromptSample.length === 0);
+  check('no Gemini prompt text is in the body at all, ticked or not',
+    strippedBody.google.geminiPromptSample === undefined);
   check('unticking the Facebook rows empties posts, comments, friends and messages',
     strippedBody.facebook.postSample.length === 0 &&
     strippedBody.facebook.commentSample.length === 0 &&
@@ -7533,7 +7532,7 @@ try {
   await chooseDepth(page);
   await answerReview(page, {
     untickCaptions: true, untickActivity: true, untickAccounts: true,
-    untickTopics: true, untickSearches: true, untickMessages: true,
+    untickTopics: true, untickMessages: true,
   });
   await page.waitForSelector('#view-profile:not([hidden])', { timeout: 60000 });
   await openAllSections(page);
@@ -7553,8 +7552,9 @@ try {
     optedOut.mostSavedAccounts.length === 0 && optedOut.mostEngagedWith.length === 0);
   check('unticking topics empties both Instagram-inferred lists',
     optedOut.instagramTopics.length === 0 && optedOut.instagramAdInterests.length === 0);
-  check('unticking searches empties the search sample',
-    optedOut.samples.searches.length === 0);
+  check('and Instagram\'s own search list is not there to untick',
+    optedOut.samples.searches === undefined &&
+    (await page.locator('#review-searches').count()) === 0);
 
   const optedOutBody = analyseBodies[analyseBodies.length - 1];
   const optedOutSent = JSON.parse(optedOutBody).digest;
@@ -7568,11 +7568,11 @@ try {
     optedOutSent.mostLikedAccounts.length === 0 &&
     optedOutSent.mostSavedAccounts.length === 0 && optedOutSent.mostEngagedWith.length === 0 &&
     optedOutSent.instagramTopics.length === 0 && optedOutSent.instagramAdInterests.length === 0 &&
-    optedOutSent.samples.searches.length === 0,
+    optedOutSent.samples.searches === undefined,
     JSON.stringify({
       captions: optedOutSent.samples.captions.length, counts: optedOutSent.counts,
       liked: optedOutSent.mostLikedAccounts.length, topics: optedOutSent.instagramTopics.length,
-      searches: optedOutSent.samples.searches.length,
+      searches: optedOutSent.samples.searches,
     }));
   // There is no image switch to untick any more, so the three checks that
   // followed the opt-out through — no images in the body, the opt-out recorded

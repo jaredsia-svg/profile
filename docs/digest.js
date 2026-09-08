@@ -42,6 +42,12 @@
     // or a one-word story overlay is a slot not spent on a sentence.
     captionChars: 30,
     comments: 360,
+    // The floor a comment has to clear. Thirty, the same as a caption, and for
+    // the same reason: the cap binds and a slot spent on "nice one" is a slot
+    // not spent on a sentence. Comments used to run on the default four, which
+    // is the floor for a *search term*, where two characters really can be a
+    // whole query.
+    commentChars: 30,
     // Messages, drawn per conversation rather than from one pile — see
     // sampleMessages for how the places are shared out and why.
     messages: 300,
@@ -102,7 +108,6 @@
     // read closely and deserves the room.
     likedCaptionChars: 300,
     savedAuthors: 120,
-    searches: 160,
     topics: 400,
     adInterests: 400,
     // The ceiling on one caption, past which it is clipped rather than
@@ -118,17 +123,23 @@
     // and every one of them is a cap on an *aggregate*, never on a raw list.
     // The same watch history shipped as raw titles would be 3.1M chars and
     // $1.33 of input on its own, five times the entire budget.
-    youtubeChannels: 120,
-    youtubeTitles: 150,
+    youtubeChannels: 50,
+    youtubeTitles: 50,
     youtubeSearches: 100,
-    googleSearchTerms: 150,
-    // Ten, down from eighty. Measured on a real export, eighty prompts cost
-    // 15,396 characters at a median of 289 — and reading them, most of that
-    // is *pasted payload* rather than anything the reader wrote: a JSON error
-    // dump, somebody else's email, a document to be summarised. The signal is
-    // the instruction on the front ("review this response to my big boss"),
-    // and ten of those carry the register without carrying the attachments.
-    geminiPrompts: 10,
+    googleSearchTerms: 50,
+    // Gemini prompts are collected on the device and **not sent**. The text
+    // was 15,396 characters at a median of 289 on a real export, and most of
+    // that was pasted payload rather than anything the reader wrote — a JSON
+    // error dump, somebody else's email, a document to be summarised — with
+    // named colleagues and unannounced business in it that no redaction pass
+    // here covers. `counts.prompts` still goes, because how much somebody
+    // asks an assistant is a real fact that costs one integer.
+    //
+    // To put the text back: restore `geminiPromptSample` in applySupplements,
+    // its `coverage.sampling.geminiPrompts` entry, its row in
+    // `trimmableSupplements`, `omitGeminiPrompts`, the `review-gemini` row in
+    // docs/app.js and its line in applyReviewDecision. Ten was the last size,
+    // measured; eighty was the size before that and too many.
     fbPosts: 200,
     fbComments: 150,
     fbFriends: 300,
@@ -952,22 +963,13 @@
           maxChars: LIMITS.captionMaxChars,
           minChars: LIMITS.captionChars,
         }),
-        comments: sampleTexts(signals.comments, LIMITS.comments, 240),
+        comments: sampleTexts(signals.comments, LIMITS.comments, 240, LIMITS.commentChars),
         // Kept out of `captions` and named for what it is. The voice half of
         // the report is read out of the reader's own writing, and a list that
         // silently mixed in six hundred captions by other people would put
         // words in somebody's mouth — the one failure this digest must not
         // have. The prompt is told the same thing in the same words.
         likedPostCaptions: sampleLikedCaptions(signals.likedCaptions),
-        // Frequency-ranked, not the last N. A plain tail spent its slots on
-        // whatever happened to be typed most recently: measured on a realistic
-        // history it wasted a quarter of them on the literal string "ok" —
-        // which bypassed the 4-character floor every other text list goes
-        // through sampleTexts to get — plus a quarter more on duplicates, and
-        // dropped the single most-repeated interest entirely because it fell
-        // outside the last 160 records. A repeated search *is* the signal, and
-        // this is the same treatment Google's searches already had.
-        searches: topKeys(searchTerms, LIMITS.searches, 4),
       },
       // Instagram's own inference about this person — curated, and much less
       // noisy than anything derived from raw follows.
@@ -1007,10 +1009,6 @@
         sampling: {
           captions: { shown: 0, available: signals.captions.length },
           comments: { shown: 0, available: signals.comments.length },
-          // `available` is distinct terms, not raw searches — the list is a
-          // histogram, so the honest denominator is how many different things
-          // were searched for, not how many times.
-          searches: { shown: 0, available: searchTerms.size },
         },
       },
     };
@@ -1020,7 +1018,6 @@
       digest.coverage.sampling.likedCaptions.shown = digest.samples.likedPostCaptions.length;
     }
     digest.coverage.sampling.comments.shown = digest.samples.comments.length;
-    digest.coverage.sampling.searches.shown = digest.samples.searches.length;
     // The ranked lists, which are truncated rather than complete — the top N
     // of however many distinct entries there were. Without these the model has
     // a list of 150 search terms, a count of 87,000 searches, and no way at
@@ -1343,7 +1340,6 @@
         videoTitleSample: sampleTexts(g.videoTitles, LIMITS.youtubeTitles, 120),
         topYoutubeSearches: topKeys(g.youtubeSearchTerms, LIMITS.youtubeSearches, 4),
         topGoogleSearches: topKeys(g.googleSearchTerms, LIMITS.googleSearchTerms, 4),
-        geminiPromptSample: sampleTexts(g.geminiPrompts, LIMITS.geminiPrompts, 300),
       };
       digest.coverage.sampling.youtubeTitles = {
         shown: digest.google.videoTitleSample.length, available: g.counts.watched,
@@ -1360,9 +1356,6 @@
       };
       digest.coverage.sampling.youtubeChannels = {
         shown: digest.google.topChannels.length, available: countOf(g.channels),
-      };
-      digest.coverage.sampling.geminiPrompts = {
-        shown: digest.google.geminiPromptSample.length, available: g.counts.prompts,
       };
     }
 
@@ -1453,7 +1446,6 @@
       ['likedPostCaptions', () => digest.samples.likedPostCaptions,
         v => { digest.samples.likedPostCaptions = v; }],
       ['comments', () => digest.samples.comments, v => { digest.samples.comments = v; }],
-      ['searches', () => digest.samples.searches, v => { digest.samples.searches = v; }],
       ['mostLikedAccounts', () => digest.mostLikedAccounts, v => { digest.mostLikedAccounts = v; }],
       ['mostSavedAccounts', () => digest.mostSavedAccounts, v => { digest.mostSavedAccounts = v; }],
       ['instagramTopics', () => digest.instagramTopics, v => { digest.instagramTopics = v; }],
@@ -1470,7 +1462,6 @@
       ['topGoogleSearches', () => digest.google && digest.google.topGoogleSearches, v => { digest.google.topGoogleSearches = v; }],
       ['topYoutubeSearches', () => digest.google && digest.google.topYoutubeSearches, v => { digest.google.topYoutubeSearches = v; }],
       ['topChannels', () => digest.google && digest.google.topChannels, v => { digest.google.topChannels = v; }],
-      ['geminiPromptSample', () => digest.google && digest.google.geminiPromptSample, v => { digest.google.geminiPromptSample = v; }],
       ['postSample', () => digest.facebook && digest.facebook.postSample, v => { digest.facebook.postSample = v; }],
       ['commentSample', () => digest.facebook && digest.facebook.commentSample, v => { digest.facebook.commentSample = v; }],
       ['fbFriends', () => digest.facebook && digest.facebook.friends, v => { digest.facebook.friends = v; }],
@@ -1518,7 +1509,6 @@
       digest.coverage.sampling.likedCaptions.shown = digest.samples.likedPostCaptions.length;
     }
     digest.coverage.sampling.comments.shown = digest.samples.comments.length;
-    digest.coverage.sampling.searches.shown = digest.samples.searches.length;
     // Refreshed like the three above, now that this list is trimmable: a
     // "shown" that still claimed the pre-trim count would misreport the
     // sampling to the reader reviewing it and to the model reading coverage.
@@ -1589,15 +1579,6 @@
     return digest;
   }
 
-  function omitSearches(digest) {
-    digest.samples.searches = [];
-    // The counter goes with the list, exactly as the supplement omitters do:
-    // leaving "shown: 160" behind next to an empty array would tell the model
-    // it is looking at a sample when it is looking at a redaction.
-    if (digest.coverage && digest.coverage.sampling) delete digest.coverage.sampling.searches;
-    return digest;
-  }
-
   // ---------- supplementary redaction ----------
   //
   // One per review row, same shape as everything above: empty the real fields,
@@ -1653,13 +1634,6 @@
     return digest;
   }
 
-  function omitGeminiPrompts(digest) {
-    if (!digest.google) return digest;
-    digest.google.geminiPromptSample = [];
-    if (digest.coverage && digest.coverage.sampling) delete digest.coverage.sampling.geminiPrompts;
-    return digest;
-  }
-
   function omitFacebookPosts(digest) {
     if (!digest.facebook) return digest;
     digest.facebook.postSample = [];
@@ -1686,8 +1660,8 @@
     build, addSupplements,
     LIMITS, charBudget, COST_CAP, FIXED_INPUT_TOKENS, MAX_OUTPUT_TOKENS, PRICING, PRICED_MODEL,
     omitMessages, omitCaptionsAndComments, omitLikedCaptions, omitActivity, omitAccounts,
-    omitTopics, omitSearches,
-    omitYouTube, omitYouTubeSearches, omitGoogleSearches, omitChrome, omitGeminiPrompts,
+    omitTopics,
+    omitYouTube, omitYouTubeSearches, omitGoogleSearches, omitChrome,
     omitFacebookPosts, omitFacebookConnections, omitFacebookMessages,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

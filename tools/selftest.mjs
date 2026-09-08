@@ -1292,8 +1292,11 @@ check('and the T/F error is named as running towards F, the way E/I runs towards
 check('neither axis may be read off sheer volume',
   /volume on this axis is as misleading as it is on E\/I/i.test(sys));
 // Named digest fields, so the guidance points at things that exist rather than
-// at a general idea of evidence.
-for (const field of ['geminiPrompts', 'instagramTopics', 'mostEngagedWith', 'rhythm.regularity']) {
+// at a general idea of evidence — which is also why `geminiPrompts` came off
+// this list rather than being left on it: the field is withheld now, and a
+// check that a prompt names a field the digest does not send is a check
+// working against the thing it was written to enforce.
+for (const field of ['topGoogleSearches', 'instagramTopics', 'mostEngagedWith', 'rhythm.regularity']) {
   check('the axis guidance points at the real digest field `' + field + '`',
     sys.includes(field), field);
 }
@@ -3500,6 +3503,17 @@ check('the sample arrives in chronological order',
     /Never quote one back as something they wrote/.test(sys));
   check('and no longer names a browsing list the digest stopped sending',
     !/`topDomains`/.test(sys));
+  // Two fields left the digest and the prompt has to leave with them. A prompt
+  // describing evidence that is not there is worse than one that is silent: it
+  // invites the model to look for something, find nothing, and read the
+  // absence as a fact about the person rather than about the export.
+  check('the prompt does not promise Instagram searches the digest no longer sends',
+    !/their most repeated searches with a count for each/.test(sys));
+  check('nor a sample of Gemini prompts',
+    !/a sample of what they have asked Gemini/.test(sys) &&
+    !/`geminiPrompts`/.test(sys));
+  check('and says plainly that both were withheld rather than missing',
+    /both were withheld, so do not reason about either, and do not read their absence as evidence/.test(sys));
 
   // The schema field that makes the number checkable, and its renderer. A
   // field generated on every run and shown to nobody is the quiet way this
@@ -4071,31 +4085,42 @@ check('omitTopics empties both Instagram-inferred lists',
   topicsRedacted.instagramTopics.length === 0 && topicsRedacted.instagramAdInterests.length === 0);
 check('omitTopics leaves the rest of the digest untouched',
   topicsRedacted.mostLikedAccounts.length === digest.mostLikedAccounts.length &&
-  topicsRedacted.samples.searches.length === digest.samples.searches.length);
+  topicsRedacted.samples.captions.length === digest.samples.captions.length);
 
-const searchesRedacted = Digest.omitSearches(Digest.build(signals, { includeMessages: false }));
-check('omitSearches empties the search sample', searchesRedacted.samples.searches.length === 0);
-check('there really were searches to begin with, or the check above is vacuous',
-  digest.samples.searches.length > 0, digest.samples.searches.length + ' searches');
-check('omitSearches leaves the rest of the digest untouched',
-  searchesRedacted.samples.captions.length === digest.samples.captions.length &&
-  searchesRedacted.instagramTopics.length === digest.instagramTopics.length);
+// Instagram's own search history is no longer sent. `word_or_phrase_searches`
+// is overwhelmingly people — account names typed into the app to reach
+// somebody's profile — and a ranked list of those is a list of who somebody
+// looks up, which mostEngagedWith and mostLikedAccounts already carry, better
+// and with a denominator. What is left of a search history that is *about the
+// world* rather than about people lives in the Google supplement.
+check('Instagram\'s own search list is not in the digest at all',
+  digest.samples.searches === undefined &&
+  digest.coverage.sampling.searches === undefined,
+  JSON.stringify(Object.keys(digest.samples)));
 
-// ---------- searches are a histogram, not the last N ----------
+// ---------- a search list is a histogram, not the last N ----------
 //
-// This was a real bug, and the shape of the fixture is what proves it: the
-// most-repeated term is deliberately buried at the *start* of the history and
-// never repeated near the end, so a `slice(-N)` tail cannot see it at all. The
-// junk and the duplicates are the other two-thirds of what the tail wasted its
-// slots on. Measured against the old code: 40 of 160 slots went to "ok", 39
-// more to duplicates, and the top interest was absent.
-const searchHistory = [];
-for (let i = 0; i < 30; i++) searchHistory.push('marathon training plan');   // the signal, early
-for (let i = 0; i < 400; i++) searchHistory.push('one off query ' + i);      // enough to fill the cap
-for (let i = 0; i < 40; i++) searchHistory.push('ok');                       // junk, and recent
-for (let i = 0; i < 25; i++) searchHistory.push('sourdough starter');        // a second real repeat
-const searchDigest = Digest.build({ ...signals, searches: searchHistory }, { includeMessages: false });
-const searchSample = searchDigest.samples.searches;
+// This was a real bug on Instagram's search list, and the lesson outlived the
+// list: `topKeys` is what Google's searches go through too, and it is the
+// function that was fixed. A plain tail spent its slots on whatever was typed
+// most recently — measured against the old code, 40 of 160 went to the literal
+// string "ok", 39 more to duplicates, and the most-repeated interest was
+// absent because it fell outside the window.
+//
+// Driven through `topGoogleSearches` now that the Instagram list is gone, so
+// the regression stays covered by the caller that still exists.
+const searchTerms = new Map([
+  ['marathon training plan', 30],
+  ['sourdough starter', 25],
+  ['ok', 40],
+]);
+for (let i = 0; i < 400; i++) searchTerms.set('one off query ' + i, 1);
+const searchDigest = Digest.build({ ...signals, supplements: { google: {
+  span: {}, counts: { watched: 0, youtubeSearches: 0, googleSearches: 495, browsed: 0, prompts: 0 },
+  channels: new Map(), videoTitles: [], youtubeSearchTerms: new Map(),
+  googleSearchTerms: searchTerms, googleSearches: [], domains: new Map(), geminiPrompts: [],
+} } }, { includeMessages: false });
+const searchSample = searchDigest.google.topGoogleSearches;
 
 // Read through accessors that tolerate the old plain-string shape, so that
 // reverting the fix makes each of these fail on its own terms with a readable
@@ -4107,31 +4132,57 @@ const countOf = s => (s && typeof s === 'object' ? s.count : undefined);
 check('searches carry how often each was repeated, not just the text',
   searchSample.every(s => s && typeof s.name === 'string' && typeof s.count === 'number'),
   JSON.stringify(searchSample[0]));
-check('the most-repeated search ranks first even though it is the oldest',
+check('the most-repeated search ranks first, ahead of the recent junk',
   termOf(searchSample[0]) === 'marathon training plan' && countOf(searchSample[0]) === 30,
   JSON.stringify(searchSample.slice(0, 2)));
 check('a second real repeat ranks above the one-off tail',
   termOf(searchSample[1]) === 'sourdough starter' && countOf(searchSample[1]) === 25,
   JSON.stringify(searchSample[1]));
-check('search terms under 4 characters are dropped, as they are everywhere else',
+check('search terms under 4 characters are dropped, however often repeated',
   !searchSample.some(s => termOf(s).length < 4),
   JSON.stringify(searchSample.map(termOf).filter(t => t.length < 4).slice(0, 6)));
 check('every slot is a distinct term, so repeats cost one slot rather than many',
   new Set(searchSample.map(termOf)).size === searchSample.length,
   searchSample.length + ' slots, ' + new Set(searchSample.map(termOf)).size + ' distinct');
-check('the cap still binds', searchSample.length === Digest.LIMITS.searches,
-  searchSample.length + ' vs ' + Digest.LIMITS.searches);
+check('the cap still binds, and is fifty rather than a hundred and fifty',
+  searchSample.length === Digest.LIMITS.googleSearchTerms &&
+  Digest.LIMITS.googleSearchTerms === 50,
+  searchSample.length + ' vs ' + Digest.LIMITS.googleSearchTerms);
 // A top-N hides its own denominator in a way a chronological tail did not, so
 // the model is told how deep the tail behind it went.
 check('searches report their coverage, counted in distinct terms not raw searches',
-  searchDigest.coverage.sampling.searches.shown === searchSample.length &&
-  searchDigest.coverage.sampling.searches.available === 402 &&   // 400 one-offs + 2 repeats; "ok" excluded
+  searchDigest.coverage.sampling.googleSearchTerms.shown === searchSample.length &&
+  searchDigest.coverage.sampling.googleSearchTerms.available === 403,
+  JSON.stringify(searchDigest.coverage.sampling.googleSearchTerms));
 
-  searchDigest.coverage.sampling.searches.available < searchHistory.length,
-  JSON.stringify(searchDigest.coverage.sampling.searches) + ' of ' + searchHistory.length + ' raw');
-check('omitSearches drops the counter with the list, not just the list',
-  Digest.omitSearches(Digest.build({ ...signals, searches: searchHistory },
-    { includeMessages: false })).coverage.sampling.searches === undefined);
+// The three Takeout list sizes, pinned to their numbers and not only to each
+// other. Every other check on them reads the constant to build its
+// expectation, so raising any of them back to where it was changed nothing —
+// which is the same gap the caption ceiling and the liked-caption limit both
+// had. These are size decisions on the largest supplement in the digest:
+// channels and titles were 120 and 150 and cost 5,189 and 14,655 characters on
+// a real export, against a Google block that was a third of the whole thing.
+check('the Takeout lists are fifty apiece, down from 120 and 150',
+  Digest.LIMITS.youtubeChannels === 50 && Digest.LIMITS.youtubeTitles === 50 &&
+  Digest.LIMITS.googleSearchTerms === 50,
+  JSON.stringify([Digest.LIMITS.youtubeChannels, Digest.LIMITS.youtubeTitles,
+    Digest.LIMITS.googleSearchTerms]));
+// And each cap actually binds on an export with more than fifty to give, or
+// the numbers above are a preference nothing enforces.
+{
+  const many = new Map();
+  for (let i = 0; i < 200; i++) many.set('Channel Number ' + i, 200 - i);
+  const wide = Digest.build({ ...signals, supplements: { google: {
+    span: {}, counts: { watched: 200, youtubeSearches: 0, googleSearches: 0, browsed: 0, prompts: 0 },
+    channels: many, videoTitles: Array.from({ length: 200 },
+      (_, i) => 'A video title long enough to be worth one of the places, number ' + i),
+    youtubeSearchTerms: new Map(), googleSearchTerms: new Map(), googleSearches: [],
+    domains: new Map(), geminiPrompts: [],
+  } } }, { includeMessages: false });
+  check('and both YouTube lists are held there on an export with more to give',
+    wide.google.topChannels.length === 50 && wide.google.videoTitleSample.length === 50,
+    wide.google.topChannels.length + ' channels, ' + wide.google.videoTitleSample.length + ' titles');
+}
 
 // The floor is opt-in for a reason: it is right for search terms and wrong for
 // names. NPR and A24 are real channels, x.com is a real domain, and a blanket
@@ -4277,12 +4328,21 @@ const heavyMessagesSignals = {
   },
 };
 const heavyMessages = Digest.build(heavyMessagesSignals, { includeMessages: true });
-// Ten, down from eighty, and pinned because the sample size is the whole
-// change: on a real export eighty prompts cost 15,396 characters at a median
-// of 289, and most of that was pasted payload — a JSON error dump, somebody
-// else's email — rather than anything the reader wrote.
-check('the Gemini prompt sample is ten, not eighty',
-  Digest.LIMITS.geminiPrompts === 10, String(Digest.LIMITS.geminiPrompts));
+// Gemini prompt text is withheld from the digest — see the note where the
+// limit used to live. The count still goes, because how much somebody asks an
+// assistant is a real fact that costs one integer, and losing it with the text
+// would be a second, unasked-for change.
+{
+  const withGoogle = Digest.build({ ...signals, supplements: { google } },
+    { includeMessages: false });
+  check('no Gemini prompt text is in the digest',
+    withGoogle.google.geminiPromptSample === undefined &&
+    withGoogle.coverage.sampling.geminiPrompts === undefined &&
+    !JSON.stringify(withGoogle).includes('half marathon training plan for a first-timer'),
+    JSON.stringify(Object.keys(withGoogle.google)));
+  check('but how many were asked still is',
+    withGoogle.google.counts.prompts > 0, String(withGoogle.google.counts.prompts));
+}
 check('the DM cap is 300, drawn from the ten conversations they write in most',
   Digest.LIMITS.messages === 300 && Digest.LIMITS.messageTopThreads === 10,
   JSON.stringify([Digest.LIMITS.messages, Digest.LIMITS.messageTopThreads]));
@@ -4297,18 +4357,33 @@ check('a heavy account caps DMs at that limit',
 //
 // "ok", "lol", "brb" carry nothing a model can read anything into, so the
 // limited slots in every sampled list should go to text that actually says
-// something. Checked against comments, which are the shortest, plainest input
-// sampleTexts still handles: captions moved to sampleCaptions and a floor of
-// thirty, and messages to sampleMessages and a floor of forty, so this is now
-// the one caller left on the default.
-const shortTextDigest = Digest.build({ ...signals,
-  comments: ['a', 'ok', 'lol', 'brb', 'fine', 'A real sentence with actual substance.'] },
-  { includeMessages: false });
-check('comments under 4 characters are dropped, 4 and over are kept',
-  shortTextDigest.samples.comments.length === 2 &&
-  shortTextDigest.samples.comments.includes('fine') &&
-  shortTextDigest.samples.comments.includes('A real sentence with actual substance.'),
-  JSON.stringify(shortTextDigest.samples.comments));
+// something. Every list of the reader's own writing has since been given a
+// floor of its own — captions 30, comments 30, messages 40 — so the default is
+// now exercised only by the supplement lists, which is where it is checked:
+// a Facebook post of four characters is still a post.
+const shortTextDigest = Digest.build({ ...signals, supplements: { facebook: {
+  ...facebook,
+  posts: ['a', 'ok', 'lol', 'brb', 'fine', 'A real sentence with actual substance.'],
+} } }, { includeMessages: false });
+check('supplement text under 4 characters is dropped, 4 and over is kept',
+  shortTextDigest.facebook.postSample.length === 2 &&
+  shortTextDigest.facebook.postSample.includes('fine') &&
+  shortTextDigest.facebook.postSample.includes('A real sentence with actual substance.'),
+  JSON.stringify(shortTextDigest.facebook.postSample));
+// And the reader's own comments do not run on that floor any more. Thirty, the
+// same as a caption: the cap binds at 360 against thousands, so a slot spent
+// on "nice one" is a slot not spent on a sentence.
+{
+  const shortComments = Digest.build({ ...signals,
+    comments: ['nice one', 'so good!!', 'A comment with enough in it to be worth a place'] },
+    { includeMessages: false });
+  check('the comment floor is thirty, the same as a caption',
+    Digest.LIMITS.commentChars === 30, String(Digest.LIMITS.commentChars));
+  check('and a two-word comment does not take one of the places',
+    shortComments.samples.comments.length === 1 &&
+    shortComments.samples.comments[0].includes('worth a place'),
+    JSON.stringify(shortComments.samples.comments));
+}
 
 // ---------- supplements in the digest: aggregation, cost, and precedence ----------
 
@@ -4413,7 +4488,7 @@ check('the trim loop really did fire, or the checks below prove nothing',
 check('every supplement list is trimmed to its floor before Instagram is touched',
   [crowded.google.videoTitleSample, crowded.google.topGoogleSearches,
     crowded.google.topGoogleSearches, crowded.google.topChannels,
-    crowded.google.geminiPromptSample]
+    crowded.google.topChannels]
     .every(list => list.length <= 10),
   JSON.stringify({ titles: crowded.google.videoTitleSample.length,
     searches: crowded.google.topGoogleSearches.length,
@@ -4449,7 +4524,6 @@ const omitCases = [
   ['omitGoogleSearches', d => d.google.topGoogleSearches.length === 0],
   ['omitChrome', d => d.google.counts.visits === undefined &&
     d.google.counts.distinctDomains === undefined],
-  ['omitGeminiPrompts', d => d.google.geminiPromptSample.length === 0],
   ['omitFacebookPosts', d => d.facebook.postSample.length === 0 && d.facebook.commentSample.length === 0],
   ['omitFacebookConnections', d => d.facebook.friends.length === 0],
   ['omitFacebookMessages', d => d.facebook.ownMessageSample.length === 0],
@@ -4563,13 +4637,21 @@ check('a heavy account plus a maxed-out supplement still fits the real budget', 
     // 12" is below it and the whole list vanished. Same total size, so the
     // list is still the small one the loop must leave alone.
     captions: many(100, i => 'Caption number ' + i + ', deliberately short.'),
-    comments: many(200, i => 'Short comment ' + i),
+    // A hundred, and each longer, for the same reason the captions beside
+    // them were changed: the comment floor is thirty now and "Short comment
+    // 12" is below it, so the whole list vanished. Same total size, so this is
+    // still the small list the loop must leave alone.
+    comments: many(100, i => 'A comment, deliberately short, number ' + i),
     messages: {
       total: 20000, threads: 200, groupThreads: 10, sent: 12000, received: 8000,
       avgSentLength: 120,
       ownTexts: many(4000, i => 'A message long enough to matter to the budget, number ' + i),
     },
-  }, { includeMessages: true, maxChars: 60000 });
+    // 40,000, lowered from 60,000. Dropping Instagram's search list and the
+    // Gemini prompt text took roughly 6,000 characters out of this fixture, so
+    // it no longer reached the old budget and the loop had nothing to do —
+    // leaving a trimming test that passed by never trimming.
+  }, { includeMessages: true, maxChars: 40000 });
 
   check('the trimming reaches the list that is actually oversized',
     monstrous.directMessages.ownMessageSample.length < Digest.LIMITS.messages,
@@ -4579,7 +4661,7 @@ check('a heavy account plus a maxed-out supplement still fits the real budget', 
       monstrous.directMessages.ownMessageSample.length,
     JSON.stringify(monstrous.coverage.sampling.ownMessages));
   check('trimming does not gut the short lists to spare the long one',
-    monstrous.samples.captions.length === 100 && monstrous.samples.comments.length === 200,
+    monstrous.samples.captions.length === 100 && monstrous.samples.comments.length === 100,
     monstrous.samples.captions.length + ' captions, ' + monstrous.samples.comments.length + ' comments');
 }
 
