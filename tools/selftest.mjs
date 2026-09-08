@@ -2426,7 +2426,34 @@ const signals = await IG.readExports([file], { includeMessages: false });
 
 check('reads posts', signals.counts.posts === 22, 'got ' + signals.counts.posts);
 check('reads stories', signals.counts.stories === 30);
-check('reads likes', signals.counts.likes === 240);
+check('reads likes', signals.counts.likes === 300, String(signals.counts.likes));
+// The 2026 export shape, end to end. `liked_posts.json` stopped being
+// { likes_media_likes: [{ title, string_list_data }] } and became a bare array
+// of { timestamp, label_values }, with the author inside a nested "Owner"
+// group and the date at the top level — none of which the reader matched. On a
+// real archive that parsed as 632 rows of nothing: the count was right, so the
+// digest looked healthy, while mostLikedAccounts came back empty on an account
+// with 270 distinct liked accounts, and 632 dated likes spanning fourteen
+// years never reached the histograms the prompt calls the best evidence in the
+// digest.
+//
+// Two separate losses, so two separate checks: an author, and a date.
+{
+  const newShape = ['newshapefriend', 'oldschoolmate', 'cyclingclubsg', 'archivepal'];
+  check('an author is read out of the newer export shape',
+    newShape.every(name => signals.likedAuthors.get(name) === 15),
+    JSON.stringify(newShape.map(n => [n, signals.likedAuthors.get(n)])));
+  check('and the older shape still reads, so both are covered at once',
+    signals.likedAuthors.get('trailrunnerdaily') === 48,
+    String(signals.likedAuthors.get('trailrunnerdaily')));
+  // The date is the half that hides. It moved to the top level of the record,
+  // so a reader looking only in string_list_data gets zero — and pushEvent
+  // drops a zero silently, leaving the count correct and the timeline short.
+  const likes2014 = signals.events.filter(e =>
+    e.kind === 'like' && new Date(e.ts * 1000).getUTCFullYear() === 2014).length;
+  check('and its date reaches the timeline rather than being dropped as a zero',
+    likes2014 === 60, likes2014 + ' likes dated to 2014');
+}
 check('reads comments', signals.counts.comments === 40);
 check('reads following', signals.following.length === 180);
 check('reads followers', signals.counts.followers === 320);
@@ -2675,7 +2702,8 @@ check('the name is read from the export, mojibake repaired',
   signals.profile.name === 'Aleç', signals.profile.name);
 check('and is replaced before the digest is sent',
   digest.profile.name === 'PsycheUser', digest.profile.name);
-check('digest carries complete counts', digest.counts.posts === 22 && digest.counts.postsLiked === 240);
+check('digest carries complete counts', digest.counts.posts === 22 && digest.counts.postsLiked === 300,
+  digest.counts.posts + ' posts, ' + digest.counts.postsLiked + ' liked');
 check('digest samples captions', digest.samples.captions.length > 0 && digest.samples.captions.length <= Digest.LIMITS.captions);
 // The prompt rule about whose life a caption describes is worth nothing if the
 // captions that trigger it never survive sampling, and it has a 4-character

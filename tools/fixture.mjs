@@ -294,6 +294,41 @@ function buildExport() {
     });
   }
 
+  // The same file, in the shape Meta ships in 2026: a bare array of
+  // { timestamp, label_values } with the author buried in a nested "Owner"
+  // group and the date at the top level. Both shapes are in the fixture
+  // because both turn up in the wild, and because the new one reached
+  // production reading as 632 rows of nothing — a right count, no authors and
+  // no dates — which is precisely the failure a fixture in only the old shape
+  // cannot show. Dated to 2014 so its events cannot be confused with the
+  // recent ones above, and given authors that appear nowhere else.
+  const newShapeLikes = [];
+  for (let i = 0; i < 60; i++) {
+    newShapeLikes.push({
+      timestamp: Math.floor(Date.UTC(2014, 5, 1) / 1000) + i * 86400,
+      media: [],
+      label_values: [
+        { label: 'URL', value: 'https://www.instagram.com/p/AAA' + i + '/', href: 'https://www.instagram.com/p/AAA' + i + '/' },
+        { label: 'Caption', value: 'A caption on somebody else\'s post, number ' + i },
+        { label: 'Title', value: '' },
+        { dict: [], title: 'Hashtags' },
+        {
+          dict: [{
+            dict: [
+              { label: 'URL', value: '' },
+              { label: 'Name', value: 'Person ' + (i % 4) },
+              { label: 'Username', value: ['newshapefriend', 'oldschoolmate', 'cyclingclubsg', 'archivepal'][i % 4] },
+            ],
+            title: '',
+          }],
+          title: 'Owner',
+        },
+        { dict: [], title: 'Brand partner' },
+      ],
+      fbid: '1812251148470315' + i,
+    });
+  }
+
   const comments = [];
   for (let i = 0; i < 40; i++) {
     comments.push({
@@ -330,6 +365,7 @@ function buildExport() {
   const files = [
     { name: 'your_instagram_activity/content/posts_1.json', content: JSON.stringify(posts) },
     { name: 'your_instagram_activity/likes/liked_posts.json', content: JSON.stringify({ likes_media_likes: likes }) },
+    { name: 'likes/liked_posts.json', content: JSON.stringify(newShapeLikes) },
     { name: 'your_instagram_activity/comments/post_comments_1.json', content: JSON.stringify({ comments_media_comments: comments }) },
     { name: 'connections/followers_and_following/following.json', content: JSON.stringify({ relationships_following: following }) },
     { name: 'connections/followers_and_following/followers_1.json', content: JSON.stringify(followers) },

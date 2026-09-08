@@ -78,13 +78,66 @@
     return 0;
   }
 
+  // Meta's newer export shape, and the third one this file has had to read.
+  //
+  // A 2026 `liked_posts.json` is a bare array of
+  // `{ timestamp, media, label_values: [...], fbid }`, where a label value is
+  // either `{ label, value }` or a nested group `{ title, dict: [ { dict: [
+  // { label, value } ] } ] }`. There is no `string_list_data`, no
+  // `string_map_data` and no `title` — which is every field the two readers
+  // above look for.
+  //
+  // The cost of not reading it was larger than it looked. A real archive's 632
+  // liked posts parsed as 632 rows of nothing: no author, so `mostLikedAccounts`
+  // came back empty on an account with 270 distinct liked accounts in it, and
+  // **no timestamp either**, because that moved to the top level — so fourteen
+  // years of likes, the one source in the whole export that is spread evenly
+  // across the archive, contributed nothing to the rhythm histograms that the
+  // prompt calls the best-evidenced thing in the digest. The count was right
+  // the whole time, which is what made it invisible.
+  //
+  // Flattened into one map, with group members keyed `Group/Field`, so
+  // "Owner/Username" cannot collide with a top-level "Username".
+  function labelMap(item) {
+    const values = item && item.label_values;
+    if (!Array.isArray(values)) return null;
+    const out = {};
+    for (const entry of values) {
+      if (!entry || typeof entry !== 'object') continue;
+      if (typeof entry.label === 'string') {
+        out[entry.label] = fixText(entry.value || '');
+        continue;
+      }
+      if (typeof entry.title !== 'string' || !Array.isArray(entry.dict)) continue;
+      // Only the first member of a group. These carry one owner and any number
+      // of hashtags; nothing here needs the second hashtag, and taking them all
+      // would let one row of a list crowd the field it lives in.
+      const first = entry.dict[0];
+      const fields = first && Array.isArray(first.dict) ? first.dict : [];
+      for (const field of fields) {
+        if (field && typeof field.label === 'string') {
+          out[entry.title + '/' + field.label] = fixText(field.value || '');
+        }
+      }
+    }
+    return out;
+  }
+
   function listEntry(item) {
     const list = item && item.string_list_data;
     const first = Array.isArray(list) && list.length ? list[0] : null;
+    // Only consulted when the older shapes yield nothing, so an export that
+    // carries both cannot have its own answer overridden by the fallback.
+    const labels = first || (item && item.title) ? null : labelMap(item);
     return {
-      value: fixText((first && first.value) || (item && item.title) || ''),
-      href: (first && first.href) || '',
-      timestamp: Number(first && first.timestamp) || 0,
+      value: fixText((first && first.value) || (item && item.title) ||
+        (labels && (labels['Owner/Username'] || labels.Title || labels.Name)) || ''),
+      href: (first && first.href) || (labels && labels.URL) || '',
+      // The top-level `timestamp` is the new shape's, and is read even when the
+      // old fields are present but undated — a row with a date somewhere is
+      // always better than a row treated as undated.
+      timestamp: Number(first && first.timestamp) || Number(item && item.timestamp) || 0,
+      owner: (labels && (labels['Owner/Username'] || labels['Owner/Name'])) || '',
     };
   }
 
@@ -261,7 +314,12 @@
         const entry = listEntry(item);
         pushEvent(out, 'like', entry.timestamp);
         out.counts.likes++;
-        const author = fixText(item.title || '');
+        // `entry.owner` is the newer shape's answer; `item.title` the older
+        // one. Whose account the post belonged to is the whole signal here —
+        // 270 distinct accounts on a real archive, and the top of that list is
+        // mostly friends rather than media, which is a different fact about
+        // somebody than the follow count is.
+        const author = fixText(item.title || '') || entry.owner;
         if (author) out.likedAuthors.set(author, (out.likedAuthors.get(author) || 0) + 1);
       }
     },
@@ -287,9 +345,14 @@
     },
     saved(out, data) {
       for (const item of asArray(data, 'saved_saved_media', 'saved_collections')) {
-        pushEvent(out, 'save', mapTimestamp(item, 'Saved on', 'Added on', 'Time'));
+        // Same fallbacks as liked posts, for the same reason: this file has
+        // moved shape too, and a saved post with no date and no author is a
+        // row that increments a counter and says nothing else.
+        const entry = listEntry(item);
+        pushEvent(out, 'save',
+          mapTimestamp(item, 'Saved on', 'Added on', 'Time') || entry.timestamp);
         out.counts.saved++;
-        const author = mapValue(item, 'Name') || fixText(item.title || '');
+        const author = mapValue(item, 'Name') || fixText(item.title || '') || entry.owner;
         if (author) out.savedAuthors.set(author, (out.savedAuthors.get(author) || 0) + 1);
       }
     },
