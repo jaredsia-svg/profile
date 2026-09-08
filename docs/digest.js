@@ -27,7 +27,23 @@
     messagesMiddle: 75,
     // The floor a message must clear to take one of those 300 places — see
     // sampleMessages for why this is a quality number and not a size one.
-    messageChars: 15,
+    //
+    // Fifty, raised from fifteen, and the trade is worth stating because it is
+    // not free. Against a real archive this is *above* the reader's own mean
+    // sent length of 37 characters, so it excludes the majority of what they
+    // actually write and keeps the more considered end of it. The pool is
+    // still far larger than the 300 places — thousands of messages clear it —
+    // so the cap goes on binding and the buckets go on choosing.
+    //
+    // What it buys: fewer places spent on "Ok seeya there at tomo!" and more
+    // on messages that carry a thought. What it costs: the sample now shows
+    // this person at their most expansive rather than at their most typical,
+    // and a few real things go with the filler — "I probably think can buy US
+    // stocks on dips!!" is 44 characters. The counter-fact survives in
+    // `averageSentLength`, which is measured over every message they ever sent
+    // rather than over this sample, so a model reading both can still see that
+    // they mostly write briefly.
+    messageChars: 50,
     // And the ceiling on one message. Raised from 240, where it was cutting
     // off the messages most worth having: 40 of 1,000 in a real export sat at
     // that cap, and they are the apologies, the explanations and the plans —

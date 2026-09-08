@@ -3306,16 +3306,27 @@ check('but the count it was read for still is',
         { text: 'Handsum', ts: 1700000000 },
         { text: 'Hahahaha wtf', ts: 1700000001 },
         { text: 'You going ah', ts: 1700000002 },
-        { text: 'this one is comfortably past the floor', ts: 1700000003 },
-        { text: 'and so is this second longer message', ts: 1700000004 },
+        { text: 'this one is comfortably past the floor and then some more besides', ts: 1700000003 },
+        { text: 'and so is this second message, which runs on for a good while longer', ts: 1700000004 },
       ],
     },
   }, { includeMessages: true });
   const text = short.directMessages.ownMessageSample.join(' | ');
   check('messages under the floor do not take a place in the sample',
     !/Handsum|Hahahaha wtf|You going ah/.test(text), text);
+  // The floor is fifty, not fifteen, and the difference is a judgement rather
+  // than a rounding: fifty sits above this reader's own mean sent length of
+  // 37 characters, so it keeps the considered end of their writing and
+  // excludes the majority of it. Pinned to the number rather than left to
+  // whatever the constant happens to say, because moving it silently changes
+  // which version of somebody the report describes.
+  check('and the floor is the considered one, well above a typical message',
+    Digest.LIMITS.messageChars === 50, String(Digest.LIMITS.messageChars));
+  check('a message of ordinary length for this person is below it',
+    Digest.LIMITS.messageChars > short.directMessages.averageSentLength,
+    Digest.LIMITS.messageChars + ' vs mean ' + short.directMessages.averageSentLength);
   check('and the ones above it do', /comfortably past the floor/.test(text) &&
-    /second longer message/.test(text), text);
+    /second message, which runs on/.test(text), text);
   // The statistic is measured over every message ever sent, not over the
   // sample, so "this person writes briefly" survives the floor entirely.
   check('the fact that somebody writes briefly is still carried, in the average',
@@ -3342,9 +3353,9 @@ check('but the count it was read for still is',
     messages: {
       total: 3, threads: 1, groupThreads: 0, sent: 3, received: 0, avgSentLength: 60,
       ownTexts: [
-        'Can try this? https://maps.app.goo.gl/oM3aGYK But if you prefer kbbq, go beside',
+        'Can try this one instead? https://maps.app.goo.gl/oM3aGYK But if you would rather have kbbq, there are a few good ones beside it',
         'https://s.grab.com/ride/CH8UURGTA1BS73A23GH0',
-        'no link in this one at all, just a sentence',
+        'no link in this one at all, just a sentence that runs long enough to clear the floor',
       ],
     },
   }, { includeMessages: true });
@@ -3352,7 +3363,7 @@ check('but the count it was read for still is',
   check('links are stripped out of the message sample',
     !/https?:\/\//.test(sample), sample);
   check('and the sentence around the link is kept, not the message dropped',
-    /Can try this\?/.test(sample) && /prefer kbbq/.test(sample), sample);
+    /Can try this one instead\?/.test(sample) && /rather have kbbq/.test(sample), sample);
 }
 
 check('digest passes through Instagram\'s own topics', digest.instagramTopics.includes('Running'));
@@ -3698,7 +3709,8 @@ const heavyMessagesSignals = {
   ...signals,
   messages: {
     total: 5000, threads: 40, groupThreads: 2, sent: 2500, received: 2500, avgSentLength: 42,
-    ownTexts: manyMessages(2500, i => 'A real message with actual content, number ' + i + '.'),
+    ownTexts: manyMessages(2500, i =>
+      'A real message with actual content in it, long enough to clear the floor, number ' + i + '.'),
   },
 };
 const heavyMessages = Digest.build(heavyMessagesSignals, { includeMessages: true });
