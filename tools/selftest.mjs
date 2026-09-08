@@ -2843,13 +2843,43 @@ check('while other people\'s handles survive, which is what the rule needs',
 // somebody dropped four years ago reached the reader identically to one they
 // are in the middle of.
 const datedCaptions = digest.samples.captions.filter(c => /^\[\d{4}\] /.test(c));
-// Not every caption: the bio has no timestamp of its own — it is whatever it
-// says today — so it is deliberately emitted bare. Everything that came off a
-// dated post carries its year.
+// Every caption now, where it used to be every caption but one: the bio was
+// the exception, pushed into this pool with no timestamp of its own. It is not
+// in the pool any more, so an undated line here would be a real defect rather
+// than the one known case.
 check('sampled captions are prefixed with the year they were written',
   datedCaptions.length > 0 &&
-  datedCaptions.length >= digest.samples.captions.length - 1,
+  datedCaptions.length === digest.samples.captions.length,
   datedCaptions.length + ' of ' + digest.samples.captions.length + ' dated');
+
+// The bio, out of the caption pool and still in the digest.
+//
+// It reaches the model as `profile.bio` and always did, so pooling it here was
+// duplication — and it arrived dateless, which sorted it to the front of an
+// otherwise chronological corpus and stripped the year prefix every line
+// beside it carries. The most deliberate sentence somebody writes about
+// themselves was competing with thousands of story overlays for a slot, and
+// unlabelled if it won one.
+check('the bio reaches the digest on its own',
+  digest.profile.bio === 'Trail runner. Dog dad. Coffee before sunrise.',
+  JSON.stringify(digest.profile.bio));
+check('and is not also poured into the caption pool',
+  !digest.samples.captions.some(c => /Trail runner/.test(c)),
+  JSON.stringify(digest.samples.captions.filter(c => /Trail runner/.test(c))));
+
+// What kind of thing each caption was, end to end through the real archive.
+// The per-kind checks further down build their own records with a `kind` on
+// each, so they pass with the parser's half of the wiring deleted — the same
+// gap the thread tags had. This is the check that fails when it is.
+{
+  const kinds = digest.samples.captions
+    .map(c => (/^\[\d{4}\] \[(\w+)\] /.exec(c) || [])[1]).filter(Boolean);
+  check('a caption parsed from a real archive reaches the digest labelled',
+    kinds.length === digest.samples.captions.length && kinds.length > 0,
+    kinds.length + ' of ' + digest.samples.captions.length);
+  check('and the fixture\'s posts, stories and reels are told apart',
+    new Set(kinds).size >= 2, JSON.stringify([...new Set(kinds)]));
+}
 check('the years are real ones off the fixture, not a constant',
   new Set(datedCaptions.map(c => c.slice(1, 5))).size > 1,
   [...new Set(datedCaptions.map(c => c.slice(1, 5)))].sort().join(','));
@@ -2920,17 +2950,229 @@ check('the sample arrives in chronological order',
   check('the sample no longer depends on which way round the export is ordered',
     fromNewestFirst.join('|') === fromOldestFirst.join('|'),
     fromNewestFirst.length + ' vs ' + fromOldestFirst.length + ' captions');
-  // And it is the recent end that is preferred, not merely a consistent end.
-  // Every caption from the most recent year has to survive: the recent half is
-  // 280 slots against 60 captions a year, so 2025 cannot be partly cut without
-  // the preference pointing the wrong way.
+  // Every year in this fixture holds exactly sixty captions, so every year has
+  // the same claim on the sample and must come away with the same share. This
+  // is the check that used to say the opposite — that the newest year survived
+  // whole while the oldest was thinned — which was true of the old rule and
+  // was the thing wrong with it. Sixteen years, 560 places, 35 each.
   const years = fromNewestFirst.map(c => Number(c.slice(1, 5)));
-  check('and it is the newest captions that are kept whole',
-    years.filter(y => y === 2025).length === 60,
-    years.filter(y => y === 2025).length + ' of 60 captions from the most recent year');
-  check('while the oldest year is the one that gets thinned',
-    years.filter(y => y === 2010).length < 60,
-    years.filter(y => y === 2010).length + ' of 60 from the oldest year');
+  const perYear = {};
+  for (const y of years) perYear[y] = (perYear[y] || 0) + 1;
+  const counts = Object.values(perYear);
+  check('years that posted equally are sampled equally',
+    Object.keys(perYear).length === 16 &&
+    Math.max(...counts) - Math.min(...counts) <= 1,
+    JSON.stringify(perYear));
+  check('and the newest year no longer takes the sample from the oldest',
+    perYear[2025] === perYear[2010], perYear[2025] + ' vs ' + perYear[2010]);
+}
+
+// ---------- captions: damped shares, and a cap on any one year ----------
+//
+// The fixture above gives every year the same volume, which is the case that
+// cannot distinguish "share by volume" from "share equally" — both return 35 a
+// year. This one is lopsided on purpose: five years of 100, 200, 400, 2,000
+// and 4,000 captions, which is roughly the shape of a real account that
+// started slowly and then posted constantly.
+//
+// Straight proportion would give the smallest year 8 places of 560 and the
+// largest 330. The square root damps that to 64 and 140 — the newest two years
+// hit the quarter cap and the rest is shared among the years that would
+// otherwise have been rounded into the margin.
+{
+  const DAY = 86400;
+  const SIZES = [100, 200, 400, 2000, 4000];
+  const captions = [];
+  SIZES.forEach((size, y) => {
+    for (let i = 0; i < size; i++) {
+      captions.push({
+        text: 'Y' + y + ' caption ' + i + ' with enough words in it to clear the floor',
+        ts: Date.UTC(2020 + y, 0, 1) / 1000 + i * DAY / 24,
+        kind: 'post',
+      });
+    }
+  });
+  const built = Digest.build({ ...signals, captions }, { includeMessages: false });
+  const got = built.samples.captions;
+  const per = SIZES.map((_, y) =>
+    got.filter(line => new RegExp('\\] Y' + y + ' caption ').test(line)).length);
+  const cap = Math.floor(Digest.LIMITS.captions * Digest.LIMITS.captionYearCap);
+
+  check('the caption sample still fills its limit on a lopsided archive',
+    got.length === Digest.LIMITS.captions, String(got.length));
+  check('no year takes more than a quarter of the caption places',
+    per.every(n => n <= cap), JSON.stringify(per) + ' cap ' + cap);
+  check('and the busiest years are actually held at that cap',
+    per[4] === cap && per[3] === cap, JSON.stringify(per));
+  // The discriminating one. Undamped, the smallest year's share of 560 is
+  // 100/6700 — eight places. Anything near that means the square root is not
+  // being applied, whatever the cap is doing at the other end.
+  const undamped = Math.floor(Digest.LIMITS.captions * SIZES[0] / SIZES.reduce((a, b) => a + b, 0));
+  check('a thin year gets far more than its raw proportion, because of the damping',
+    per[0] > undamped * 4, per[0] + ' places vs ' + undamped + ' undamped');
+  check('while still getting less than a year that posted forty times as much',
+    per[0] < per[4], JSON.stringify(per));
+  // Order is not enough on its own: equal shares would also satisfy the cap and
+  // the ordering above. The damped allocation is monotonic *and* unequal.
+  check('and the shares rise with volume rather than being flat',
+    per[0] < per[1] && per[1] < per[2] && per[2] < per[3], JSON.stringify(per));
+}
+
+// The damping law on its own, on a fixture the cap cannot reach.
+//
+// Every check above runs on an archive lopsided enough that the busiest years
+// sit at the quarter cap — and the cap alone lifts a thin year from 8 places to
+// 47, because what it takes off the top has to be redistributed. So those
+// checks confirm the cap and say much less about the square root than they
+// look like they do. Here the volumes step by 1.4 and no year reaches 25%,
+// which leaves the allocation to the damping alone: the ratio between the
+// biggest year's share and the smallest should be the square root of the ratio
+// between their volumes, not the ratio itself.
+{
+  const DAY = 86400;
+  const SIZES = [100, 140, 196, 274, 384, 538, 753, 1054];
+  const captions = [];
+  SIZES.forEach((size, y) => {
+    for (let i = 0; i < size; i++) {
+      captions.push({
+        text: 'Y' + y + ' caption ' + i + ' with enough words in it to clear the floor',
+        ts: Date.UTC(2016 + y, 0, 1) / 1000 + i * DAY / 24,
+        kind: 'post',
+      });
+    }
+  });
+  const got = Digest.build({ ...signals, captions }, { includeMessages: false }).samples.captions;
+  const per = SIZES.map((_, y) =>
+    got.filter(line => new RegExp('\\] Y' + y + ' caption ').test(line)).length);
+  const cap = Math.floor(Digest.LIMITS.captions * Digest.LIMITS.captionYearCap);
+  const volumeRatio = SIZES[7] / SIZES[0];
+  const shareRatio = per[7] / per[0];
+
+  check('this fixture leaves every year clear of the cap, so the damping is alone',
+    per.every(n => n < cap), JSON.stringify(per) + ' cap ' + cap);
+  check('the biggest year\'s share is the square root of its volume advantage',
+    Math.abs(shareRatio - Math.sqrt(volumeRatio)) < 0.5,
+    shareRatio.toFixed(2) + ' vs sqrt ' + Math.sqrt(volumeRatio).toFixed(2) +
+    ' (raw ratio would be ' + volumeRatio.toFixed(1) + ')');
+  check('and not its volume advantage itself',
+    shareRatio < volumeRatio / 2, shareRatio.toFixed(2) + ' vs ' + volumeRatio.toFixed(1));
+}
+
+// ---------- captions: the two halves inside one year ----------
+//
+// Half the most recent, half the longest of what recency did not take — the
+// same complementary split the message sampler uses. On a fixture where length
+// runs *against* time, so the newest captions are the shortest and the longest
+// are the oldest: a rule that took only the longest would take the oldest
+// twice, and the middle of the year would appear in neither half.
+//
+// One year, so the whole 560 comes from it and the split is the only thing
+// deciding which 560.
+{
+  const DAY = 86400;
+  const captions = [];
+  for (let i = 0; i < 1000; i++) {
+    captions.push({
+      // i = 0 is oldest and longest; i = 999 is newest and shortest.
+      text: 'C' + String(i).padStart(3, '0') + ' ' + 'x'.repeat(35 + Math.floor((999 - i) / 2)),
+      ts: Date.UTC(2024, 0, 1) / 1000 + i * DAY / 24,
+      kind: 'post',
+    });
+  }
+  const got = Digest.build({ ...signals, captions }, { includeMessages: false }).samples.captions;
+  const idx = got.map(line => Number(/C(\d+) /.exec(line)[1]));
+  const half = Math.round(Digest.LIMITS.captions * Digest.LIMITS.captionRecentShare);
+
+  check('a single year on its own fills the whole caption sample',
+    got.length === Digest.LIMITS.captions, String(got.length));
+  check('half the places in a year go to its most recent captions',
+    idx.filter(i => i >= 1000 - half).length === half,
+    idx.filter(i => i >= 1000 - half).length + ' of ' + half);
+  check('and half to the longest of what recency did not already take',
+    idx.filter(i => i < half).length === half,
+    idx.filter(i => i < half).length + ' of ' + half);
+  check('so the middle of the year appears in neither half',
+    idx.every(i => i < half || i >= 1000 - half),
+    JSON.stringify(idx.filter(i => i >= half && i < 1000 - half).slice(0, 5)));
+}
+
+// ---------- captions: the ceiling, and what length is measured at ----------
+//
+// A caption past 600 characters is clipped, not dropped. The number matters a
+// second time over, because the length a caption is *measured* at decides
+// which half it lands in — and `sampleTexts`, which captions used to go
+// through, clips first and ranks afterwards. Every caption past the ceiling
+// ties at the same value there, and the longest half goes to whichever the
+// sort reached first.
+//
+// Two oversized sets, so the measurement has something to get wrong: S is
+// barely over the ceiling and oldest, L is three times over it and sits in the
+// middle. They are 400 captions competing for the longest half's 280 places.
+{
+  const HOUR = 3600;
+  const base = Date.UTC(2024, 0, 1) / 1000;
+  const captions = [];
+  for (let i = 0; i < 200; i++) {
+    captions.push({ text: 'S' + i + ' ' + 's'.repeat(620), ts: base + i * HOUR, kind: 'post' });
+  }
+  for (let i = 0; i < 200; i++) {
+    captions.push({ text: 'L' + i + ' ' + 'l'.repeat(1990) + ' ENDCAP',
+      ts: base + (200 + i) * HOUR, kind: 'post' });
+  }
+  for (let i = 0; i < 400; i++) {
+    captions.push({ text: 'F' + i + ' ' + 'f'.repeat(100),
+      ts: base + (400 + i) * HOUR, kind: 'post' });
+  }
+  const got = Digest.build({ ...signals, captions }, { includeMessages: false }).samples.captions;
+  const bodies = got.map(line => line.replace(/^\[\d{4}\] \[\w+\] /, ''));
+  const longs = bodies.filter(b => /^L\d+ /.test(b));
+
+  check('a caption past the ceiling is clipped rather than dropped',
+    longs.length > 0 && longs.every(b => b.length === Digest.LIMITS.captionMaxChars + 1 &&
+      b.endsWith('…')),
+    longs.length + ' kept, first is ' + (longs[0] || '').length + ' chars');
+  check('and the clipped tail is genuinely gone',
+    !bodies.some(b => b.includes('ENDCAP')));
+  // The discriminating one. Measured after clipping, S and L are the same
+  // length and the longest half fills with whichever the sort reaches first —
+  // S, being older and so earlier in the chronological order the sort is
+  // stable against. Measured whole, L wins on its merits.
+  check('the longest half ranks captions on their real length, not the clipped one',
+    longs.length === 200, longs.length + ' of 200');
+}
+
+// ---------- captions: what kind of thing each one was ----------
+//
+// Four sources were being poured into one list with nothing to tell them
+// apart. A story overlay is a place name thrown up for a day; a caption is a
+// considered public statement. Pooled, a difference in register between them
+// is invisible, and it is one of the more revealing things in an archive.
+{
+  const DAY = 86400;
+  const captions = [];
+  for (let i = 0; i < 200; i++) {
+    captions.push({ text: 'A considered public caption, number ' + i + ', written at length.',
+      ts: Date.UTC(2024, 0, 1) / 1000 + i * DAY, kind: 'post' });
+    captions.push({ text: 'A story overlay that still clears the floor, ' + i,
+      ts: Date.UTC(2024, 0, 1) / 1000 + i * DAY + 60, kind: 'story' });
+    captions.push({ text: 'A reel title long enough to be worth a place, ' + i,
+      ts: Date.UTC(2024, 0, 1) / 1000 + i * DAY + 120, kind: 'reel' });
+  }
+  const got = Digest.build({ ...signals, captions }, { includeMessages: false }).samples.captions;
+  const kinds = got.map(line => (/^\[\d{4}\] \[(\w+)\] /.exec(line) || [])[1]);
+  check('every caption says what kind of thing it was',
+    kinds.every(Boolean), got.find((_, i) => !kinds[i]));
+  check('and all three kinds reach the sample rather than one crowding the rest',
+    new Set(kinds).size === 3, JSON.stringify([...new Set(kinds)]));
+  // The tag has to follow the record, not the position. Every third caption is
+  // a story, so a tag applied by index would still produce three kinds in the
+  // right proportions and mean nothing.
+  const mismatched = got.filter(line =>
+    (/\[post\] /.test(line) && !/considered public caption/.test(line)) ||
+    (/\[story\] /.test(line) && !/story overlay/.test(line)) ||
+    (/\[reel\] /.test(line) && !/reel title/.test(line)));
+  check('and the tag names what the caption actually is',
+    mismatched.length === 0, JSON.stringify(mismatched.slice(0, 3)));
 }
 
 // A record with no usable timestamp is emitted bare rather than guessed at —
@@ -2941,8 +3183,10 @@ check('an undated caption comes through without a year rather than a wrong one',
     { includeMessages: false }).samples.captions[0] === 'a caption with no timestamp at all');
 // Epoch-zero and far-future stamps turn up in real exports; neither is a year.
 check('a nonsense timestamp is treated as undated, not as 1970',
-  Digest.build({ ...signals, captions: [{ text: 'stamped at the epoch itself', ts: 1 }] },
-    { includeMessages: false }).samples.captions[0] === 'stamped at the epoch itself');
+  Digest.build({ ...signals,
+    captions: [{ text: 'stamped at the epoch itself, and long enough to clear the floor', ts: 1 }] },
+    { includeMessages: false }).samples.captions[0] ===
+      'stamped at the epoch itself, and long enough to clear the floor');
 check('digest samples comments', digest.samples.comments.length > 0);
 check('digest carries the hour histogram', digest.rhythm.hourOfDay.length === 24);
 check('digest carries the weekday histogram', digest.rhythm.dayOfWeek.length === 7);
@@ -3166,6 +3410,21 @@ check('but the count it was read for still is',
     /do not read the proportions as a measure of how close anyone is/.test(sys));
   check('and that a ten-conversation sample is not a measure of reach',
     /for reach, read `activeThreads` and `threads`, never the tag count/.test(sys));
+
+  // The same three obligations for captions, whose sampler moved the same way.
+  // A digest whose shape the prompt does not describe is a digest that quietly
+  // licenses readings its own construction rules out — and the caption sample
+  // is now deliberately flatter than the archive, which is exactly the sort of
+  // thing a model will otherwise take at face value.
+  check('the prompt describes the per-year caption sampling actually used',
+    /square root\*? of each year's volume/.test(sys) &&
+    /no year takes more than a quarter/.test(sys));
+  check('and names the three kinds a caption can be',
+    /`\[post\]`, `\[story\]` and `\[reel\]`/.test(sys));
+  check('and tells the model a difference between them is a finding',
+    /A difference in register between them is a finding/.test(sys));
+  check('and warns that a flattened sample is not evidence of flat posting',
+    /not evidence they posted similarly in both/.test(sys));
 
   // The schema field that makes the number checkable, and its renderer. A
   // field generated on every run and shown to nobody is the quiet way this
@@ -3456,14 +3715,24 @@ check('but the count it was read for still is',
   check('the fact that somebody writes briefly is still carried, in the average',
     short.directMessages.averageSentLength === 12,
     String(short.directMessages.averageSentLength));
-  // Captions keep the old floor. A fourteen-character caption is a caption;
-  // the message floor is high because the message cap binds, and nothing else
-  // shares that reason.
+  // Captions have a floor of their own, lower than the message one and higher
+  // than the four characters every other list uses. Three separate numbers,
+  // and they must stay separate: a message is talk, a caption is a small
+  // public statement, and a comment on somebody else's post is neither.
   const shortCaps = Digest.build({
-    ...signals, captions: [{ text: 'very jialat', ts: 1700000000 }],
+    ...signals,
+    captions: [
+      { text: 'very jialat', ts: 1700000000 },
+      { text: 'a caption with enough in it to be worth a place', ts: 1700000001 },
+    ],
   }, { includeMessages: false });
-  check('captions keep their own lower floor, which the message one must not reach',
-    JSON.stringify(shortCaps.samples.captions).includes('very jialat'),
+  check('the caption floor sits between the comment one and the message one',
+    Digest.LIMITS.captionChars === 30 &&
+    Digest.LIMITS.captionChars < Digest.LIMITS.messageChars,
+    Digest.LIMITS.captionChars + ' vs messages at ' + Digest.LIMITS.messageChars);
+  check('and it is applied, so a two-word caption does not take a place',
+    !JSON.stringify(shortCaps.samples.captions).includes('very jialat') &&
+    JSON.stringify(shortCaps.samples.captions).includes('worth a place'),
     JSON.stringify(shortCaps.samples.captions));
 }
 
@@ -3941,17 +4210,18 @@ check('a heavy account caps DMs at that limit',
 //
 // "ok", "lol", "brb" carry nothing a model can read anything into, so the
 // limited slots in every sampled list should go to text that actually says
-// something. Checked against captions here since sampleTexts() is the one
-// function behind captions, comments and messages alike — proving it once
-// on its shortest, plainest input proves it for all three.
+// something. Checked against comments, which are the shortest, plainest input
+// sampleTexts still handles: captions moved to sampleCaptions and a floor of
+// thirty, and messages to sampleMessages and a floor of forty, so this is now
+// the one caller left on the default.
 const shortTextDigest = Digest.build({ ...signals,
-  captions: ['a', 'ok', 'lol', 'brb', 'fine', 'A real sentence with actual substance.'] },
+  comments: ['a', 'ok', 'lol', 'brb', 'fine', 'A real sentence with actual substance.'] },
   { includeMessages: false });
-check('captions under 4 characters are dropped, 4 and over are kept',
-  shortTextDigest.samples.captions.length === 2 &&
-  shortTextDigest.samples.captions.includes('fine') &&
-  shortTextDigest.samples.captions.includes('A real sentence with actual substance.'),
-  JSON.stringify(shortTextDigest.samples.captions));
+check('comments under 4 characters are dropped, 4 and over are kept',
+  shortTextDigest.samples.comments.length === 2 &&
+  shortTextDigest.samples.comments.includes('fine') &&
+  shortTextDigest.samples.comments.includes('A real sentence with actual substance.'),
+  JSON.stringify(shortTextDigest.samples.comments));
 
 // ---------- supplements in the digest: aggregation, cost, and precedence ----------
 
@@ -4200,7 +4470,11 @@ check('a heavy account plus a maxed-out supplement still fits the real budget', 
   // rather than touch a message.
   const monstrous = Digest.build({
     ...heavySignals(),
-    captions: many(200, i => 'Short caption ' + i),
+    // A hundred rather than two hundred, and each one longer, because the
+    // caption floor is thirty characters now: the old fixture's "Short caption
+    // 12" is below it and the whole list vanished. Same total size, so the
+    // list is still the small one the loop must leave alone.
+    captions: many(100, i => 'Caption number ' + i + ', deliberately short.'),
     comments: many(200, i => 'Short comment ' + i),
     messages: {
       total: 20000, threads: 200, groupThreads: 10, sent: 12000, received: 8000,
@@ -4217,7 +4491,7 @@ check('a heavy account plus a maxed-out supplement still fits the real budget', 
       monstrous.directMessages.ownMessageSample.length,
     JSON.stringify(monstrous.coverage.sampling.ownMessages));
   check('trimming does not gut the short lists to spare the long one',
-    monstrous.samples.captions.length === 200 && monstrous.samples.comments.length === 200,
+    monstrous.samples.captions.length === 100 && monstrous.samples.comments.length === 200,
     monstrous.samples.captions.length + ' captions, ' + monstrous.samples.comments.length + ' comments');
 }
 

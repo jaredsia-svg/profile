@@ -16,7 +16,31 @@
   // context, so a digest this size is still comfortable — a heavy account
   // lands around 150KB, which is well inside it.
   const LIMITS = {
+    // Captions, drawn per year rather than from one pile — see sampleCaptions
+    // for why, and for what the old rule was actually spending its budget on.
     captions: 560,
+    // No single year may take more than a quarter of the sample. The old rule
+    // gave the newest year 43% of the places on a measured fourteen-year
+    // archive, and the first seven years 54 between them.
+    captionYearCap: 0.25,
+    // Places are shared out in proportion to the *square root* of a year's
+    // volume, so a year with a hundred times the posts gets ten times the
+    // places rather than a hundred. Straight proportion barely dented the
+    // recency; an equal share per year over-corrected, forcing thin early
+    // years to hand over everything they had, which is their longest posts —
+    // it grew the digest 29% and made the sample more essay-heavy, not less.
+    // Volume is already carried complete in the rhythm histograms, so the
+    // sample does not need to encode it a second time; what only the sample
+    // can give is voice at a time, and that needs coverage of times.
+    captionYearDamping: 0.5,
+    // Within a year: this share the most recent, the rest the longest of what
+    // is left, the same complementary split the message sampler uses.
+    captionRecentShare: 0.5,
+    // The floor a caption must clear. Higher than the four characters every
+    // other text list uses, because the caption cap binds hard — 560 places
+    // against 3,800 captions on a heavy account — and a slot spent on an emoji
+    // or a one-word story overlay is a slot not spent on a sentence.
+    captionChars: 30,
     comments: 360,
     // Messages, drawn per conversation rather than from one pile — see
     // sampleMessages for how the places are shared out and why.
@@ -68,7 +92,13 @@
     searches: 160,
     topics: 400,
     adInterests: 400,
-    textChars: 600,
+    // The ceiling on one caption, past which it is clipped rather than
+    // dropped. 400 rather than the 600 it was: a 400-character caption is
+    // already several paragraphs, and on a measured archive the reduction pays
+    // for the whole year-by-year redistribution — it costs only the tail of
+    // the longest captions and leaves the median and the upper quartile of the
+    // sample untouched.
+    captionMaxChars: 400,
     // Supplementary sources. Sized so both together add roughly 100,000 chars
     // — about $0.04 of input against a run whose realistic total is $0.20 —
     // and every one of them is a cap on an *aggregate*, never on a raw list.
@@ -247,7 +277,12 @@
   // The cost is 300 tokens of reserve, which is 1,050 characters off the
   // digest ceiling — under 1% of it, against a heavy account that already sits
   // 18% clear.
-  const FIXED_INPUT_TOKENS = 22900;
+  // And again to 23,200 for the caption-tag paragraph, which does the same
+  // three jobs for [post]/[story]/[reel] that the last one did for [t1]..[t10]:
+  // what the tag is, that a difference in register across tags is a finding,
+  // and the two readings the sample's shape does not support. Measured at
+  // 22,953.
+  const FIXED_INPUT_TOKENS = 23200;
 
   // lib/gemini.js caps generation here, so this is the most output — visible
   // report plus thinking — that a single call can possibly bill for. Held to
@@ -416,12 +451,93 @@
     return cleaned.filter(c => chosen.has(c.display)).map(c => c.display);
   }
 
-  // ---------- messages, sampled in three deliberate parts ----------
+  // ---------- captions, sampled per year ----------
   //
-  // Captions go through `sampleTexts`, which takes the most recent half and
-  // then the longest of the rest. That shape is bimodal by construction: the
-  // newest and the wordiest, and nothing in between. For captions it is a
-  // reasonable trade. For messages it throws away the thing that matters most.
+  // Captions used to go through `sampleTexts` — the most recent half, then the
+  // longest of everything older. Measured against a plausible fourteen-year
+  // archive of 3,800 captions, that rule spent **239 of its 560 places on the
+  // newest year** and gave the first seven years 54 between them. On an
+  // account posting eight hundred things a year the "recent half" is not a
+  // window on the present, it is the last four months; and every year before
+  // it was represented only by its longest posts. The reader saw one season of
+  // ordinary voice and fourteen years of essays.
+  //
+  // The year prefix was added so the report could say *when*. It cannot, while
+  // nearly half the evidence is one quarter.
+  //
+  // So: group by year, share the places out in proportion to the square root
+  // of each year's volume, cap any one year at a quarter, and inside a year
+  // take half the most recent and half the longest of what is left. On the
+  // same corpus that moves the first seven years from 54 places to about 159
+  // and the newest year from 239 to about 75, for a few per cent of size.
+  //
+  // Each line is tagged with what it was — [post], [story], [reel]. The four
+  // sources were being poured into one list with nothing to tell them apart,
+  // and they are different acts: a story overlay is a place name thrown up for
+  // a day, a caption is a considered public statement. A difference in
+  // register between them is a finding about how somebody presents themselves,
+  // and until now it was not visible at all.
+  function sampleCaptions(texts, opts) {
+    const cleaned = [];
+    const seen = new Set();
+    for (const item of texts) {
+      const dated = Boolean(item) && typeof item === 'object';
+      // Measured whole, shown clipped — the same reason as in sampleMessages.
+      // Ranking on the clipped length would tie every caption past the ceiling
+      // at the same value and hand the longest half to whichever the sort
+      // reached first. `sampleTexts` still has that defect; captions no longer
+      // go through it.
+      const full = trim(dated ? item.text : item, Infinity);
+      const value = full.length > opts.maxChars
+        ? full.slice(0, opts.maxChars) + '…' : full;
+      if (full.length < opts.minChars || seen.has(value)) continue;
+      seen.add(value);
+      const ts = dated && Number.isFinite(item.ts) && item.ts > 0 ? item.ts : 0;
+      const year = dated ? yearOf(item.ts) : '';
+      const kind = dated && typeof item.kind === 'string' ? item.kind : '';
+      cleaned.push({ ts, year, kind, len: full.length, text: value });
+    }
+    cleaned.sort((a, b) => a.ts - b.ts);
+    if (!cleaned.length) return [];
+
+    // Grouped by the year they were written. Everything undated shares one
+    // group, which is what a bare-string list amounts to and is the right
+    // answer for it — one group means one quota and no cap.
+    const byYear = new Map();
+    for (const c of cleaned) {
+      if (!byYear.has(c.year)) byYear.set(c.year, []);
+      byYear.get(c.year).push(c);
+    }
+    const years = [...byYear.keys()].sort();
+    const groups = years.map(y => byYear.get(y));
+
+    const total = Math.min(opts.limit, cleaned.length);
+    // The weights are the damped sizes; the *capacities* stay the real ones,
+    // so a year is never handed more places than it has captions. Scaled by a
+    // hundred because allocatePlaces divides integers, and a year of 4 against
+    // a year of 2 would otherwise round to the same weight.
+    const weights = groups.map(g => Math.max(1, Math.round(Math.pow(g.length, opts.damping) * 100)));
+    const cap = cleaned.length <= opts.limit ? total : Math.floor(total * opts.yearCap);
+    const quota = allocatePlaces(weights, total, cap, groups.map(g => g.length));
+
+    const out = [];
+    groups.forEach((group, i) => {
+      const want = quota[i];
+      if (want <= 0) return;
+      const recentCount = Math.min(want, Math.round(want * opts.recentShare));
+      const picked = new Set(recentCount > 0 ? group.slice(-recentCount) : []);
+      for (const c of group.filter(m => !picked.has(m)).sort((a, b) => b.len - a.len)
+        .slice(0, want - picked.size)) picked.add(c);
+      for (const c of group) {
+        if (!picked.has(c)) continue;
+        out.push((c.year ? '[' + c.year + '] ' : '') +
+          (c.kind ? '[' + c.kind + '] ' : '') + c.text);
+      }
+    });
+    return out;
+  }
+
+  // ---------- messages, sampled per conversation ----------
   //
   // How somebody writes to people close to them is mostly visible in ordinary
   // messages — the register, the warmth, how much they explain themselves, how
@@ -541,13 +657,15 @@
   }
 
   /**
-   * Share `total` places among conversations of the given sizes, in proportion
-   * to size, with no conversation taking more than `cap`.
+   * Share `total` places among groups, in proportion to `sizes`, with no group
+   * taking more than `cap` and none taking more than its `capacities` entry.
+   * Used by both samplers: conversations weighted by message count, and years
+   * weighted by the square root of theirs.
    *
-   * Proportional-and-capped is not one step. A conversation that cannot take
-   * its full share — because it is at the cap, or because it simply has fewer
-   * messages than its share — leaves a remainder behind, and that remainder
-   * has to go somewhere or the sample quietly comes back short. So this is
+   * Proportional-and-capped is not one step. A group that cannot take its full
+   * share — because it is at the cap, or because it simply holds fewer items
+   * than its share — leaves a remainder behind, and that remainder has to go
+   * somewhere or the sample quietly comes back short. So this is
    * water-filling: hand out shares, collect what would not fit, hand out the
    * remainder among whoever still has room, repeat.
    *
@@ -555,11 +673,17 @@
    * last few places evenly. Deterministic beats fair for a handful of places,
    * because the result cache keys on the digest.
    */
-  function allocatePlaces(sizes, total, cap) {
+  function allocatePlaces(sizes, total, cap, capacities) {
+    // Weight and capacity are the same number for conversations — a thread's
+    // share is its size and it cannot give more than it holds — but not for
+    // years, where the share is damped and the capacity is not. Passed apart
+    // so the damping cannot quietly also shrink what a year is allowed to
+    // supply.
+    const room = capacities || sizes;
     const quota = sizes.map(() => 0);
     let left = total;
     const fill = ceiling => {
-      const roomOf = i => Math.min(ceiling, sizes[i]) - quota[i];
+      const roomOf = i => Math.min(ceiling, room[i]) - quota[i];
       for (let pass = 0; pass < 8 && left > 0; pass++) {
         const open = sizes.map((_, i) => i).filter(i => roomOf(i) > 0);
         if (!open.length) return;
@@ -770,7 +894,14 @@
       },
       rhythm: buildRhythm(signals.events),
       samples: {
-        captions: sampleTexts(signals.captions, LIMITS.captions, LIMITS.textChars),
+        captions: sampleCaptions(signals.captions, {
+          limit: LIMITS.captions,
+          yearCap: LIMITS.captionYearCap,
+          damping: LIMITS.captionYearDamping,
+          recentShare: LIMITS.captionRecentShare,
+          maxChars: LIMITS.captionMaxChars,
+          minChars: LIMITS.captionChars,
+        }),
         comments: sampleTexts(signals.comments, LIMITS.comments, 240),
         // Frequency-ranked, not the last N. A plain tail spent its slots on
         // whatever happened to be typed most recently: measured on a realistic

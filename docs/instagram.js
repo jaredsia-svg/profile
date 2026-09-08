@@ -187,12 +187,18 @@
   // dropped four years ago and one they are in the middle of came through
   // identically. `ts` is seconds, or 0 when the record carried no timestamp;
   // digest.js turns it into a year at sampling time.
-  function addText(out, text, timestamp) {
+  function addText(out, text, timestamp, kind) {
     const clean = fixText(text).trim();
     if (!clean) return;
     if (out.corpusChars >= LIMITS.corpusChars) return;
     out.corpusChars += clean.length;
-    out.captions.push({ text: clean, ts: toSeconds(timestamp) || 0 });
+    // What kind of thing this was. A story overlay, a reel title and a post
+    // caption are different acts of self-presentation — one is a place name
+    // thrown up for a day, one is a considered public statement — and they
+    // were being poured into one list with nothing to tell them apart. The
+    // digest tags each sampled line with this, so a difference in register
+    // between them can be read as the finding it is rather than as noise.
+    out.captions.push({ text: clean, ts: toSeconds(timestamp) || 0, kind: kind || 'post' });
   }
 
   const handlers = {
@@ -206,7 +212,7 @@
         // carry it on the post. Take whichever is longer.
         const caption = [post.title, media[0] && media[0].title]
           .map(t => fixText(t || '')).sort((a, b) => b.length - a.length)[0] || '';
-        addText(out, caption, ts);
+        addText(out, caption, ts, 'post');
         if (media.length > 1) out.counts.carousels++;
         // Only the first still of a carousel is a candidate — it is the frame
         // they chose as the cover, and taking all ten would let one post crowd
@@ -225,7 +231,7 @@
       for (const story of asArray(data, 'ig_stories', 'stories')) {
         pushEvent(out, 'story', story.creation_timestamp);
         out.counts.stories++;
-        addText(out, story.title, story.creation_timestamp);
+        addText(out, story.title, story.creation_timestamp, 'story');
         addMedia(out, 'story', story.uri, story.creation_timestamp,
           fixText(story.title || '').length, 1);
       }
@@ -236,14 +242,16 @@
         const first = media[0] || {};
         pushEvent(out, 'reel', reel.creation_timestamp || first.creation_timestamp);
         out.counts.reels++;
-        addText(out, first.title || reel.title, reel.creation_timestamp || first.creation_timestamp);
+        addText(out, first.title || reel.title,
+          reel.creation_timestamp || first.creation_timestamp, 'reel');
       }
     },
     igtv(out, data) {
       for (const item of asArray(data, 'ig_igtv_media', 'ig_other_content')) {
         const media = Array.isArray(item.media) ? item.media : [item];
         pushEvent(out, 'post', (media[0] || {}).creation_timestamp);
-        addText(out, (media[0] || {}).title || item.title, (media[0] || {}).creation_timestamp);
+        addText(out, (media[0] || {}).title || item.title,
+          (media[0] || {}).creation_timestamp, 'post');
       }
     },
     profilePhotos(out, data) {
@@ -335,8 +343,13 @@
         out.profile.website = out.profile.website || mapValue(item, 'Website');
         out.profile.birthday = out.profile.birthday || mapValue(item, 'Date of birth', 'Birthday');
       }
-      // The bio is whatever it says today, so it is dateless rather than old.
-      if (out.profile.bio) addText(out, out.profile.bio, 0);
+      // The bio is *not* pushed into the caption pool, and used to be. It
+      // reaches the digest on its own as `profile.bio`, so pooling it here
+      // duplicated it — and worse, it arrived dateless, which sorted it to the
+      // front of an otherwise chronological corpus and stripped the year
+      // prefix that every line beside it carries. The single most deliberate
+      // sentence somebody writes about themselves was competing with thousands
+      // of story overlays for a sampling slot, and unlabelled if it won one.
     },
     basedIn(out, data) {
       for (const item of asArray(data, 'inferred_data_primary_location', 'account_based_in')) {

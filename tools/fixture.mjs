@@ -371,10 +371,15 @@ function buildExport() {
     {
       name: 'your_instagram_activity/content/stories.json',
       content: JSON.stringify({
+        // Most stories carry no text at all, which is why the parser has to
+        // tolerate an empty title. A few carry an overlay, and those are what
+        // make the caption pool more than one kind of thing — without them the
+        // [story] label has nothing to attach to and the end-to-end check on
+        // it passes vacuously.
         ig_stories: Array.from({ length: 30 }, (_, i) => ({
           uri: 'media/stories/' + i + '.png',
           creation_timestamp: at(i * 5, 7),
-          title: '',
+          title: i % 5 === 0 ? 'Overlay text on a story, the ' + i + 'th one of them' : '',
         })),
       }),
     },
