@@ -2910,7 +2910,8 @@ check('and is not also poured into the caption pool',
 {
   const liked = digest.samples.likedPostCaptions;
   check('a caption on a liked post reaches the digest from a real archive',
-    liked.length === 60, liked.length + ' liked captions');
+    liked.length === Digest.LIMITS.likedCaptions && liked.length > 0,
+    liked.length + ' liked captions');
   check('and carries the year it was liked, off the export rather than invented',
     liked.every(c => /^\[2014\] A caption on somebody else/.test(c)), liked[0]);
   check('and its text is nowhere in the reader\'s own captions',
@@ -3102,43 +3103,55 @@ check('the sample arrives in chronological order',
 //
 // The only text in the digest somebody else wrote. It is held apart from the
 // reader's own captions permanently and by name, because the voice half of the
-// report is read out of that list and six hundred captions by other people
-// poured into it would put words in somebody's mouth.
+// report is read out of that list and captions written by other people poured
+// into it would put words in somebody's mouth.
 //
-// The most recent hundred, deliberately not a spread. The two samplers above
-// read voice, which changes slowly and is worth seeing at several ages; this
-// reads interest, which does not keep. A post liked in 2014 is evidence of a
-// 2014 interest, and the fourteen-year view of *who* they liked is already
-// carried by mostLikedAccounts and the like histogram.
+// Fifty, drawn at random from the last twelve months. Two separate judgements
+// and each has its own fixture below: the *window* is the recency decision —
+// what somebody reaches for now is the interest signal, and the account half
+// already covers the whole archive — and the *randomness inside it* is what
+// stops fifty places going to a fortnight on anyone who likes things in bursts.
 {
   const DAY = 86400;
-  const base = Date.UTC(2014, 0, 1) / 1000;
+  const base = Date.UTC(2020, 0, 1) / 1000;
   const likedCaptions = [];
-  for (let i = 0; i < 400; i++) {
+  // Two hundred inside a single year, and two hundred long before it. A rule
+  // that ignored the window would reach the OLD ones; a rule that took the
+  // newest fifty would cluster at the top of the recent ones. Neither can pass
+  // the pair of checks below.
+  for (let i = 0; i < 200; i++) {
     likedCaptions.push({
-      text: 'L' + String(i).padStart(3, '0') + ' a caption somebody else wrote on a post that was liked',
-      ts: base + i * 10 * DAY,
+      text: 'OLD' + String(i).padStart(3, '0') + ' a caption somebody else wrote, from long ago',
+      ts: base + i * DAY,
+    });
+  }
+  for (let i = 0; i < 200; i++) {
+    likedCaptions.push({
+      text: 'NEW' + String(i).padStart(3, '0') + ' a caption somebody else wrote on a post that was liked',
+      ts: base + (2000 + i) * DAY,
     });
   }
   const built = Digest.build({ ...signals, likedCaptions }, { includeMessages: false });
   const got = built.samples.likedPostCaptions;
-  const idx = got.map(line => Number(/L(\d+) /.exec(line)[1]));
+  const idx = got.map(line => Number(/NEW(\d+) /.exec(line) ? /NEW(\d+) /.exec(line)[1] : -1));
 
-  // Pinned to the number as well as to the constant, because every check in
-  // this block reads the constant to build its expectation and so passes at
-  // any value — moving the limit to 250 changed nothing here on the first
-  // run. A hundred is a size decision measured against a real export: the
-  // most recent hundred came to about 30,000 characters once the ceiling bit.
-  check('a hundred liked captions, and a 300-character ceiling on each',
-    Digest.LIMITS.likedCaptions === 100 && Digest.LIMITS.likedCaptionChars === 300,
+  // Pinned to the numbers as well as to the constants, because every check
+  // here reads the constant to build its expectation and so passes at any
+  // value — which is exactly how a limit moved from 100 to 250 once went
+  // unnoticed in this block.
+  check('fifty liked captions, clipped at four hundred characters',
+    Digest.LIMITS.likedCaptions === 50 && Digest.LIMITS.likedCaptionChars === 400,
     JSON.stringify([Digest.LIMITS.likedCaptions, Digest.LIMITS.likedCaptionChars]));
   check('the liked captions are sampled to their own limit',
     got.length === Digest.LIMITS.likedCaptions, String(got.length));
-  // The discriminating part: the *most recent* hundred, not the first hundred
-  // and not a hundred spread across the twelve years the fixture covers. Both
-  // of those would return a hundred lines and look identical in a count.
-  check('and they are the most recent hundred rather than any hundred',
-    Math.min(...idx) === 400 - Digest.LIMITS.likedCaptions && Math.max(...idx) === 399,
+  check('nothing older than the twelve-month window gets a place',
+    !got.some(line => /\] OLD\d/.test(line)),
+    JSON.stringify(got.filter(line => /\] OLD\d/.test(line)).slice(0, 3)));
+  // The discriminating half. Taking the newest fifty of the window would put
+  // every index at 150 or above; a draw across the window reaches the bottom
+  // of it. Both rules return fifty lines and both look right in a count.
+  check('and the fifty are drawn across the window rather than off its newest end',
+    Math.min(...idx) < 50 && Math.max(...idx) >= 150,
     'oldest kept ' + Math.min(...idx) + ', newest ' + Math.max(...idx));
   check('handed over oldest first, like every other dated list here',
     idx.every((n, i) => i === 0 || n > idx[i - 1]), JSON.stringify(idx.slice(0, 4)));
@@ -3148,6 +3161,25 @@ check('the sample arrives in chronological order',
     built.coverage.sampling.likedCaptions.shown === got.length &&
     built.coverage.sampling.likedCaptions.available === 400,
     JSON.stringify(built.coverage.sampling.likedCaptions));
+  // Deterministic, for the same reason every other draw in this file is: the
+  // result cache keys on the digest, and a sample that moved between rebuilds
+  // would charge the reader for their own retry.
+  check('the draw is deterministic, so a retry keys the same',
+    JSON.stringify(Digest.build({ ...signals, likedCaptions },
+      { includeMessages: false }).samples.likedPostCaptions) === JSON.stringify(got));
+
+  // An archive whose likes all predate the window keeps its newest year rather
+  // than coming back empty — the window is anchored to their newest liked
+  // post, not to today, which also keeps the draw stable from one day to the
+  // next.
+  const dormant = Digest.build({
+    ...signals,
+    likedCaptions: likedCaptions.slice(0, 200),
+  }, { includeMessages: false }).samples.likedPostCaptions;
+  check('an archive that stopped years ago still gets its last year of likes',
+    dormant.length === Digest.LIMITS.likedCaptions &&
+    dormant.every(line => /\] OLD\d/.test(line)),
+    dormant.length + ' from a dormant archive');
 
   // Never merged into the reader's own captions. This is the check that would
   // catch the worst version of this feature: a report that quotes a stranger's
@@ -4293,6 +4325,23 @@ check('heavy account caps captions', heavy.samples.captions.length === Digest.LI
   heavy.samples.captions.length + ' captions');
 check('heavy account caps comments', heavy.samples.comments.length === Digest.LIMITS.comments);
 check('heavy account caps liked accounts', heavy.mostLikedAccounts.length === Digest.LIMITS.likedAuthors);
+// Pinned to the number, not only to the constant — the check above reads the
+// constant to build its expectation and so passes at any value, which is the
+// fourth limit in this file to have had that hole. Fifteen because past the
+// top dozen a real archive's counts flatten into accounts liked once or twice.
+check('and that cap is fifteen, where the tail starts',
+  Digest.LIMITS.likedAuthors === 15 && heavy.mostLikedAccounts.length === 15,
+  Digest.LIMITS.likedAuthors + ', ' + heavy.mostLikedAccounts.length + ' kept');
+// Shortening the list must not lose the size of what it was drawn from. Both
+// halves are still there: the complete total, and the distinct-account
+// denominator beside the fifteen.
+check('the total number of likes survives the shortened list, complete',
+  heavy.counts.postsLiked === signals.counts.likes && heavy.counts.postsLiked > 15,
+  String(heavy.counts.postsLiked));
+check('and the fifteen say how many accounts they were chosen from',
+  heavy.coverage.sampling.likedAccounts.shown === 15 &&
+  heavy.coverage.sampling.likedAccounts.available === 900,
+  JSON.stringify(heavy.coverage.sampling.likedAccounts));
 check('heavy account caps topics', heavy.instagramTopics.length === Digest.LIMITS.topics);
 check('heavy account still fits the total budget',
   heavy.coverage.digestChars <= Digest.LIMITS.totalChars, heavy.coverage.digestChars + ' chars');

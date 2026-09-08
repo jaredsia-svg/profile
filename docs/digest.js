@@ -93,20 +93,38 @@
     // of them at the start. Selection is made on the *full* length, so the
     // longest bucket still means longest; only the text shown is clipped.
     messageMaxChars: 600,
-    likedAuthors: 240,
+    // Fifteen. Two hundred and forty was a list, not a ranking: past the top
+    // dozen the counts flatten into a long tail of accounts liked once or
+    // twice, which says nothing a follow count does not already say. Fifteen
+    // is where a real archive's tail starts — its top entries run 28, 23, 22,
+    // 21, 19 and are mostly friends rather than media, which is the whole
+    // signal. How many likes there were in total is not lost with the tail:
+    // `counts.postsLiked` carries it complete, and `coverage.sampling
+    // .likedAccounts.available` says how many distinct accounts the fifteen
+    // were drawn from.
+    likedAuthors: 15,
     // Captions on the posts they liked — somebody else's words, not theirs.
-    // A hundred, and the most recent hundred rather than a spread: what a
-    // person reaches for now is the interest signal; what they liked in 2014
-    // is an interest they may have dropped, and the *account* half of the
-    // signal is already carried across the whole archive by mostLikedAccounts.
-    // Measured at about 30,000 characters on a real export once the ceiling
-    // below bites, which is paid for twice over by the two cuts beside it.
-    likedCaptions: 100,
+    // Fifty, drawn at random from the last twelve months rather than taken off
+    // the newest end. The window is the interest judgement: what somebody
+    // reaches for now is the signal, and a post liked in 2014 is evidence of a
+    // 2014 interest that the *account* half already covers across the whole
+    // archive. The randomness inside the window is what stops fifty places
+    // going to a fortnight — a heavy month would otherwise fill the sample
+    // and read as a year.
+    likedCaptions: 50,
+    // Twelve months, anchored to their newest liked post rather than to the
+    // clock. Anchoring to the clock would empty this for anyone dormant for a
+    // year, and worse, would move the sample every day — the result cache keys
+    // on the digest, so a window that slid with the date would miss the cache
+    // and charge the reader for their own retry.
+    likedCaptionWindowSeconds: 365 * 24 * 60 * 60,
     // Lower than the reader's own captions get, on purpose. A liked caption is
     // evidence about their taste, not about their voice, and taste is legible
     // from the first paragraph — where their own writing is the thing being
-    // read closely and deserves the room.
-    likedCaptionChars: 300,
+    // read closely and deserves the room. Four hundred rather than three: nine
+    // of the 48 captions in a real twelve-month window run past it, and the
+    // ones that do are the long-form posts somebody stops to read.
+    likedCaptionChars: 400,
     savedAuthors: 120,
     topics: 400,
     adInterests: 400,
@@ -593,9 +611,38 @@
       cleaned.push({ ts, display: (year ? '[' + year + '] ' : '') + value });
     }
     cleaned.sort((a, b) => a.ts - b.ts);
-    // Sliced off the newest end and handed back in order, so the block reads
-    // forwards like every other dated list here.
-    return cleaned.slice(-LIMITS.likedCaptions).map(c => c.display);
+    if (!cleaned.length) return [];
+
+    // The window, anchored to their newest liked post — see the limit for why
+    // not to the clock. An archive whose likes all predate the window keeps
+    // its newest year rather than returning nothing, because `newest` is by
+    // definition inside it.
+    const newest = cleaned[cleaned.length - 1].ts;
+    const recent = cleaned.filter(c => c.ts >= newest - LIMITS.likedCaptionWindowSeconds);
+    if (recent.length <= LIMITS.likedCaptions) return recent.map(c => c.display);
+
+    // Drawn at random within the window, then restored to chronological order.
+    // Random rather than newest-first because the window is already the recency
+    // judgement: taking the newest fifty *inside* a year would collapse to a
+    // fortnight on anyone who likes things in bursts, which is most people.
+    const drawn = new Set(recent.slice()
+      .sort((a, b) => stableHash(a.display) - stableHash(b.display))
+      .slice(0, LIMITS.likedCaptions));
+    return recent.filter(c => drawn.has(c)).map(c => c.display);
+  }
+
+  // Deterministic, and that is not a detail. The server keys its result cache
+  // on the digest, so a draw made with Math.random would produce a different
+  // digest on every rebuild — a different key, a missed cache, and the reader
+  // paying again for the retry that was supposed to be free. This hashes the
+  // text itself, so the same archive always yields the same draw.
+  function stableHash(text) {
+    let hash = 2166136261;
+    for (let i = 0; i < text.length; i++) {
+      hash ^= text.charCodeAt(i);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
   }
 
   // ---------- messages, sampled per conversation ----------
