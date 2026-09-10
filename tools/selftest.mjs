@@ -5,7 +5,7 @@
 // and validates the prompt schemas against the structured-output rules.
 // The live model call is covered by tools/livetest.mjs, which needs a key.
 import { execFileSync } from 'node:child_process';
-import { readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -4799,6 +4799,108 @@ check('a heavy account plus a maxed-out supplement still fits the real budget', 
       Math.floor((((Digest.COST_CAP - Digest.MAX_OUTPUT_TOKENS * (7.50 / 1e6)) / (1.50 / 1e6))
         - Digest.FIXED_INPUT_TOKENS) * CHARS_PER_TOKEN),
     String(Digest.charBudget(Digest.COST_CAP)));
+}
+
+// ---------- the spend ledger ----------
+//
+// Every engine has always returned `usage` — gemini.js reads promptTokenCount,
+// candidatesTokenCount, thoughtsTokenCount and cachedContentTokenCount off the
+// response — and the server dropped all of it. Two questions had no answer as
+// a result: what a run actually costs, and whether the context cache is being
+// hit. The second is the one that hides, because a cache that has silently
+// stopped working produces correct reports at the same speed and shows up
+// only on a bill that arrives a month later with no per-call breakdown.
+{
+  const store = join(tmpdir(), 'psycheai-selftest-usage-' + process.pid + '.jsonl');
+  try { rmSync(store); } catch (error) { /* not there */ }
+  process.env.PSYCHEAI_USAGE_STORE = store;
+  const usage = await import('../lib/usage.js?fresh=' + Date.now()).then(m => m.default || m);
+
+  // Rates live in two places — here and docs/digest.js — because the browser
+  // cannot require() a Node module and this must not import a browser bundle.
+  // The duplication is deliberate; this is what keeps it honest, the same way
+  // FIXED_INPUT_TOKENS is held to the real prompt.
+  check('the ledger prices the same model the digest budget prices',
+    Boolean(usage.RATES[Digest.PRICED_MODEL]), Digest.PRICED_MODEL);
+  // Every model in the table, not only the one currently selected. Checking
+  // just `PRICED_MODEL` left the other entry free to drift, and the other
+  // entry is the one somebody switches *to* — the moment the two copies
+  // disagreeing would matter most. Null-safe throughout, because the check
+  // above can fail and a bare `.input` on the result took the whole runner
+  // down before it printed a single ✗.
+  const rateDrift = Object.keys(Digest.MODEL_RATES).filter(name => {
+    const mine = usage.RATES[name];
+    const theirs = Digest.MODEL_RATES[name];
+    return !mine || mine.input !== theirs.inputPerToken || mine.output !== theirs.outputPerToken;
+  });
+  check('and every model in it is priced the same as the digest budget prices it',
+    rateDrift.length === 0, JSON.stringify(rateDrift));
+  check('a cached token is priced below an uncached one, or the cache is invisible',
+    Object.values(usage.RATES).every(r => r.cachedInput < r.input),
+    JSON.stringify(usage.RATES));
+
+  const row = usage.record('analyse', {
+    model: Digest.PRICED_MODEL,
+    usage: { inputTokens: 40000, outputTokens: 9000, cachedTokens: 16000 },
+  }, false);
+  check('a call is recorded with its tokens, not just that it happened',
+    row.input === 40000 && row.output === 9000 && row.cached === 16000, JSON.stringify(row));
+  // The cached share is the whole point of recording `cached`, so it has to be
+  // priced differently from the rest — a ledger that billed a cache hit at the
+  // full rate would report the same total whether the cache worked or not,
+  // which is the exact blindness this file exists to remove.
+  // Detail rendered without calling a method on either number: both are null
+  // when the priced model is missing from the table, and `full.toFixed(6)`
+  // threw there — killing the runner before it printed the failure that would
+  // have named the cause.
+  const full = usage.priceOf(Digest.PRICED_MODEL, 40000, 9000, 0);
+  check('and a cached token costs less than an uncached one',
+    Number.isFinite(row.costUsd) && Number.isFinite(full) &&
+    row.costUsd < full && row.costUsd > 0, row.costUsd + ' vs ' + full);
+  check('the cost is flagged as derived rather than reported',
+    row.costEstimated === true);
+
+  // An unfamiliar model must not lose the call. Switching model is exactly
+  // when a spend record matters most, and pricing an unknown one as zero would
+  // be worse than admitting the gap.
+  const unknown = usage.record('analyse', {
+    model: 'some-model-nobody-priced',
+    usage: { inputTokens: 100, outputTokens: 50, cachedTokens: 0 },
+  }, false);
+  check('a model with no rates keeps its tokens and loses only the dollar figure',
+    unknown.costUsd === null && unknown.input === 100 && unknown.output === 50,
+    JSON.stringify(unknown));
+
+  usage.record('premium', {
+    model: Digest.PRICED_MODEL,
+    usage: { inputTokens: 38000, outputTokens: 7000, cachedTokens: 0 },
+  }, true);
+  const t = usage.summary(30);
+  check('the summary counts every call and splits them by kind',
+    t.calls === 3 && t.byKind.analyse === 2 && t.byKind.premium === 1, JSON.stringify(t.byKind));
+  check('and reports the two numbers it exists for: cost per call and cache share',
+    t.costPerCallUsd > 0 && Math.abs(t.cachedShare - 16000 / 78100) < 0.01,
+    JSON.stringify({ perCall: t.costPerCallUsd, cached: t.cachedShare }));
+
+  // A ledger that threw would turn a report somebody is waiting for into an
+  // error. gemini.js applies the same rule to the cache it may fail to create:
+  // an optimisation that can break the product is not worth having.
+  //
+  // Blocked by putting a *directory* where the file goes, on the module that
+  // is already loaded. The first version re-imported with a cache-busting
+  // query and a poisoned env var, which does nothing at all for a CommonJS
+  // module — require() has its own cache and the query never reaches it — so
+  // the write went on succeeding and the check passed with the swallow
+  // deleted.
+  rmSync(store);
+  mkdirSync(store, { recursive: true });
+  let threw = false;
+  try {
+    usage.record('analyse', { model: Digest.PRICED_MODEL, usage: {} }, false);
+  } catch (error) { threw = true; }
+  check('recording never throws, whatever the disk says', !threw);
+  rmSync(store, { recursive: true });
+  delete process.env.PSYCHEAI_USAGE_STORE;
 }
 
 check('nothing exports an image count any more', Digest.IMAGES === undefined);

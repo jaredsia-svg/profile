@@ -4,7 +4,7 @@
 //
 // Run with: node tools/uitest.mjs [--shots]
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -231,6 +231,9 @@ async function answerReview(page, options) {
 // should never be able to mistake it for one that works anywhere real.
 const UITEST_PROMO = 'uitest-promo-not-a-real-code';
 
+const USAGE_STORE = join(tmpdir(), 'psycheai-uitest-usage.jsonl');
+try { rmSync(USAGE_STORE); } catch (error) { /* not there yet */ }
+
 // Mock mode: every part of the pipeline runs for real except the model call.
 const server = spawn(process.execPath, [join(root, 'server.js')], {
   env: {
@@ -241,6 +244,10 @@ const server = spawn(process.execPath, [join(root, 'server.js')], {
     // mid-run would 503 every upload after that point and report the damage
     // as a pile of unrelated selector timeouts.
     PSYCHEAI_BUDGET_FILE: join(tmpdir(), 'psycheai-uitest-budget.jsonl'),
+    // And its own spend ledger, for the same reason, plus one more: the suite
+    // asserts on what lands in this file, so it has to be empty at the start
+    // of the run rather than carrying whatever a previous one left.
+    PSYCHEAI_USAGE_STORE: USAGE_STORE,
     PSYCHEAI_DAILY_FREE_LIMIT: '100000',
     // And the per-caller rate limits, for exactly the reason above. A suite
     // drives dozens of analyses from one address in a few minutes, which is
@@ -9789,6 +9796,33 @@ try {
     await page.reload({ waitUntil: 'load' });
     return (await visibleNav()).join('|') === 'FAQ';
   })());
+
+  // What every model call cost, written by lib/usage.js from what the engine
+  // reported. The engines have always returned `usage`; until this ledger
+  // existed the server dropped it, and the two questions it answers — what a
+  // run costs, and whether the context cache is being hit — had no answer at
+  // all. Checked here rather than in the unit suite because the wiring is the
+  // part that breaks: lib/usage.js can be perfect while nothing calls it.
+  {
+    let ledger = '';
+    try { ledger = readFileSync(USAGE_STORE, 'utf8'); } catch (error) { ledger = ''; }
+    const rows = ledger.split('\n').filter(Boolean).map(line => JSON.parse(line));
+    check('every model call the suite drove is in the spend ledger',
+      rows.length > 0, rows.length + ' rows');
+    check('and each row carries the tokens, the model and a costed estimate',
+      rows.every(r => typeof r.input === 'number' && typeof r.output === 'number' &&
+        typeof r.cached === 'number' && typeof r.model === 'string' &&
+        r.costEstimated === true && typeof r.day === 'string'),
+      JSON.stringify(rows[0]));
+    // Free and paid runs both, which is the whole reason this does not live
+    // inside budget.record: that only meters the free half.
+    check('and both the free and the paid halves of the traffic are recorded',
+      rows.some(r => r.paid === false) && rows.some(r => r.paid === true),
+      JSON.stringify(rows.map(r => r.kind + ':' + r.paid).slice(0, 8)));
+    check('and the paid kinds are named rather than lumped in with the free ones',
+      new Set(rows.map(r => r.kind)).size > 1,
+      JSON.stringify([...new Set(rows.map(r => r.kind))]));
+  }
 
   check('no console errors anywhere in the flow', consoleErrors.length === 0, consoleErrors.join(' | '));
 } catch (error) {

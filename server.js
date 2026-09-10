@@ -17,6 +17,7 @@ const payments = require('./lib/stripe');
 const paymentLedger = require('./lib/premiumLedger');
 const budget = require('./lib/budget');
 const results = require('./lib/results');
+const usage = require('./lib/usage');
 const rateLimit = require('./lib/ratelimit');
 const nonces = require('./lib/nonce');
 // Required directly rather than reached through provider.active: the paid
@@ -480,6 +481,12 @@ async function handleAnalyse(request, response) {
     produce: async () => {
       const result = await engine.analyseProfile(body.digest);
 
+      // What it cost, from what the provider reported. Recorded for every run
+      // rather than only the free ones: the budget below meters free calls,
+      // and a spend ledger that could not see the paid half would answer "what
+      // does a run cost" with half the runs.
+      usage.record('analyse', result, paying);
+
       // Both recorded only after the call actually came back, so a provider
       // outage neither spends the day's budget nor burns the reader's payment.
       if (paying) {
@@ -613,6 +620,7 @@ async function handlePremiumAnalysis(request, response) {
     settle: release,
     produce: async () => {
       const result = await engine.analysePremium(body.digest);
+      usage.record('premium', result, true);
       paymentLedger.recordUse(paymentIntentId, 'premium');
       return result;
     },
@@ -729,6 +737,7 @@ async function handleCompatibility(request, response) {
     settle: release,
     produce: async () => {
       const result = await engine.analyseCompatibility(a, b, mode, stance);
+      usage.record('compatibility', result, true);
       paymentLedger.recordUse(paymentIntentId, 'compatibility');
       return result;
     },

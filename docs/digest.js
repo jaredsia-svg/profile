@@ -1721,6 +1721,7 @@
   root.PsycheDigest = {
     build, addSupplements,
     LIMITS, charBudget, COST_CAP, FIXED_INPUT_TOKENS, MAX_OUTPUT_TOKENS, PRICING, PRICED_MODEL,
+    MODEL_RATES,
     omitMessages, omitCaptionsAndComments, omitLikedCaptions, omitActivity, omitAccounts,
     omitTopics,
     omitYouTube, omitYouTubeSearches, omitGoogleSearches, omitChrome,

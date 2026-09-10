@@ -10,7 +10,8 @@
     "test:ui": "node tools/uitest.mjs",
     "test:live": "node tools/livetest.mjs",
     "models": "node tools/models.mjs",
-    "models:grok": "node tools/models-grok.mjs"
+    "models:grok": "node tools/models-grok.mjs",
+    "usage": "node tools/usage.mjs"
   },
   "engines": {
     "node": ">=18"
