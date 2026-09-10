@@ -1813,11 +1813,25 @@ eviction window that suits steady high-rate traffic. This app goes minutes or ho
 which is precisely when an implicit entry has already been evicted. An explicit entry with its own TTL
 survives the gaps.
 
-**Short TTL, because caching is not free.** Cached tokens carry an hourly storage charge, so an entry
-no second call ever reaches costs more than it saved — roughly break-even at one analysis per hour on
-a one-hour TTL. The cache is therefore created lazily, only ever *after* a real call, when another is
-most likely, and defaults to a 15-minute life so a quiet night lapses instead of billing storage.
-`PSYCHEAI_GEMINI_CACHE_TTL` raises it once traffic keeps it warm, or `0` turns it off.
+**Off by default, because caching is not free.** Cached tokens carry an hourly storage charge, so an
+entry no second call ever reaches costs more than it saved. The break-even is worth writing down,
+because the prompt size cancels out of both sides and what is left is a rate against a rate:
+
+```
+caching pays when   calls per hour  >  storage rate / (input rate − cached rate)
+```
+
+At Gemini's flash pricing that is `1.00 / (1.50 − 0.375)` — about **0.9 analyses an hour, sustained**.
+Ten a day is 0.4, comfortably under. This paragraph carried the same figure for a long time while the
+default sat at a 15-minute TTL, which is the worst case at that rate: gaps of a couple of hours mean
+nearly every call misses *and* still pays to create an entry that expires unread. Lengthening the TTL
+makes it worse rather than better — a day of storage on a 15,000-token prompt costs more than the
+handful of hits it earns.
+
+So the default is `0`: the system instruction rides inline and no storage is billed. Set
+`PSYCHEAI_GEMINI_CACHE_TTL` to a number of seconds once `npm run usage` shows sustained traffic above
+about one call an hour, choosing a TTL longer than the typical gap between calls. The cache is still
+created lazily, only ever *after* a real call, when another is most likely.
 
 **The compatibility prompt is deliberately left uncached.** At ~1,900 tokens it is under the floor
 Gemini will accept, so offering it would fail on every call and buy a wasted round trip. The schema is
@@ -4145,7 +4159,7 @@ on every read, whether it came from the camera, a photo of a code, a pasted link
 ## Tests
 
 ```bash
-npm test           # 980 checks: synthesises a real ZIP export and runs
+npm test           # 983 checks: synthesises a real ZIP export and runs
                    # unzip → parse → digest → card → QR → decode; proves the
                    # digest caps and budget hold on a heavy account; checks the
                    # image selector spans the timeline and drops what it should;

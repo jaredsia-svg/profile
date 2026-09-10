@@ -40,6 +40,15 @@ const Card = globalThis.PsycheCard;
 const prompts = await import('../lib/prompts.js').then(m => m.default);
 const mock = await import('../lib/mock.js').then(m => m.default);
 const claude = await import('../lib/claude.js').then(m => m.default);
+// The context cache is **off by default** — see the break-even written out in
+// lib/gemini.js — but the machinery is still there and still has to work the
+// day traffic justifies switching it on. So the suite declares it wants
+// caching enabled, before the module reads the variable at load time, and the
+// shipped default is checked separately in a subprocess with a clean
+// environment. Setting it here rather than testing whatever the ambient
+// environment happens to say is also what stops this block passing or failing
+// depending on the machine it runs on.
+process.env.PSYCHEAI_GEMINI_CACHE_TTL = '900';
 const gemini = await import('../lib/gemini.js').then(m => m.default);
 const grok = await import('../lib/grok.js').then(m => m.default);
 process.env.PSYCHEAI_RECIPIENTS_FILE = process.env.PSYCHEAI_RECIPIENTS_FILE ||
@@ -166,6 +175,36 @@ check('grok can list models for discovery', typeof grok.listModels === 'function
 
   const BIG = 'x'.repeat(Math.ceil(T.CACHE_MIN_TOKENS * 3.5) + 1000);
   const SMALL = 'x'.repeat(1000);
+
+  // What the app actually ships with, read from a subprocess whose environment
+  // says nothing about caching. Zero, because below roughly one call an hour
+  // the storage charge on an entry outruns what its hits save — and a 900
+  // second TTL at this app's traffic was the worst case of all, missing on
+  // nearly every call while still paying to create an entry that expired
+  // unread. This is the number, not the mechanism: the checks below run with
+  // caching switched on so the mechanism stays covered either way.
+  const shippedTtl = JSON.parse(execFileSync(process.execPath,
+    ['-e', 'process.stdout.write(JSON.stringify(require("' +
+      join(root, 'lib', 'gemini.js') + '").__testing.CACHE_TTL_SECONDS))'],
+    { env: { PATH: process.env.PATH } }).toString());
+  check('the context cache ships switched off, because it loses money at this rate',
+    shippedTtl === 0, String(shippedTtl));
+  check('and an explicit TTL still turns it on, so it can be switched back',
+    T.CACHE_TTL_SECONDS === 900, String(T.CACHE_TTL_SECONDS));
+  // The number and the switch are two different claims, and only the second
+  // one matters. Deleting the `if (!CACHE_TTL_SECONDS)` guard inside
+  // `cacheable` left the default reading zero while every prompt was still
+  // offered to the cache — a setting that says off and behaves on. Asked of a
+  // subprocess because the suite itself runs with caching deliberately on.
+  const offBehaviour = JSON.parse(execFileSync(process.execPath,
+    ['-e', 'const g = require("' + join(root, 'lib', 'gemini.js') + '").__testing;' +
+      'const p = require("' + join(root, 'lib', 'prompts.js') + '");' +
+      'process.stdout.write(JSON.stringify({ ttl: g.CACHE_TTL_SECONDS,' +
+      ' cacheable: g.cacheable(p.PROFILE_SYSTEM) }))'],
+    { env: { PATH: process.env.PATH, PSYCHEAI_GEMINI_CACHE_TTL: '0' } }).toString());
+  check('and a TTL of zero really does stop prompts being offered to the cache',
+    offBehaviour.ttl === 0 && offBehaviour.cacheable === false,
+    JSON.stringify(offBehaviour));
 
   check('the profile prompt is big enough to be worth caching',
     T.cacheable(prompts.PROFILE_SYSTEM));
