@@ -4187,20 +4187,25 @@ check('searches report their coverage, counted in distinct terms not raw searche
   searchDigest.coverage.sampling.googleSearchTerms.available === 403,
   JSON.stringify(searchDigest.coverage.sampling.googleSearchTerms));
 
-// The three Takeout list sizes, pinned to their numbers and not only to each
+// The four Takeout list sizes, pinned to their numbers and not only to each
 // other. Every other check on them reads the constant to build its
 // expectation, so raising any of them back to where it was changed nothing —
 // which is the same gap the caption ceiling and the liked-caption limit both
-// had. These are size decisions on the largest supplement in the digest:
-// channels and titles were 120 and 150 and cost 5,189 and 14,655 characters on
-// a real export, against a Google block that was a third of the whole thing.
-check('the Takeout lists are fifty apiece, down from 120 and 150',
-  Digest.LIMITS.youtubeChannels === 50 && Digest.LIMITS.youtubeTitles === 50 &&
-  Digest.LIMITS.googleSearchTerms === 50,
+// had. These are size decisions on what was the largest supplement in the
+// digest: the block was a third of a real digest and is now an eighth.
+//
+// They are not all the same number, and the differences are the point. A
+// video title costs 112 characters against 44 for a channel name, so titles
+// buy less per character than the channel list they sit beside. YouTube
+// searches were the last of the four still at their original size — a
+// leftover rather than a decision, and 4,294 characters of one.
+check('the Takeout lists are sized by what they cost, not uniformly',
+  Digest.LIMITS.youtubeChannels === 50 && Digest.LIMITS.youtubeTitles === 25 &&
+  Digest.LIMITS.googleSearchTerms === 50 && Digest.LIMITS.youtubeSearches === 40,
   JSON.stringify([Digest.LIMITS.youtubeChannels, Digest.LIMITS.youtubeTitles,
-    Digest.LIMITS.googleSearchTerms]));
-// And each cap actually binds on an export with more than fifty to give, or
-// the numbers above are a preference nothing enforces.
+    Digest.LIMITS.googleSearchTerms, Digest.LIMITS.youtubeSearches]));
+// And each cap actually binds on an export with more to give, or the numbers
+// above are a preference nothing enforces.
 {
   const many = new Map();
   for (let i = 0; i < 200; i++) many.set('Channel Number ' + i, 200 - i);
@@ -4212,7 +4217,7 @@ check('the Takeout lists are fifty apiece, down from 120 and 150',
     domains: new Map(), geminiPrompts: [],
   } } }, { includeMessages: false });
   check('and both YouTube lists are held there on an export with more to give',
-    wide.google.topChannels.length === 50 && wide.google.videoTitleSample.length === 50,
+    wide.google.topChannels.length === 50 && wide.google.videoTitleSample.length === 25,
     wide.google.topChannels.length + ' channels, ' + wide.google.videoTitleSample.length + ' titles');
 }
 
@@ -4332,6 +4337,18 @@ check('heavy account caps liked accounts', heavy.mostLikedAccounts.length === Di
 check('and that cap is fifteen, where the tail starts',
   Digest.LIMITS.likedAuthors === 15 && heavy.mostLikedAccounts.length === 15,
   Digest.LIMITS.likedAuthors + ', ' + heavy.mostLikedAccounts.length + ' kept');
+// Saves are the twin of likes and had drifted to eight times the length —
+// likes went to fifteen and saves stayed at a hundred and twenty. A save is if
+// anything the stronger signal per item, being something somebody meant to come
+// back to, so there is no reading on which one deserves eight times the room.
+check('saved accounts are capped the same as liked ones, and actually held there',
+  Digest.LIMITS.savedAuthors === Digest.LIMITS.likedAuthors &&
+  Digest.LIMITS.savedAuthors === 15 && heavy.mostSavedAccounts.length === 15,
+  Digest.LIMITS.savedAuthors + ', ' + heavy.mostSavedAccounts.length + ' kept');
+check('and say how many accounts they were chosen from',
+  heavy.coverage.sampling.savedAccounts.shown === 15 &&
+  heavy.coverage.sampling.savedAccounts.available === 400,
+  JSON.stringify(heavy.coverage.sampling.savedAccounts));
 // Shortening the list must not lose the size of what it was drawn from. Both
 // halves are still there: the complete total, and the distinct-account
 // denominator beside the fifteen.

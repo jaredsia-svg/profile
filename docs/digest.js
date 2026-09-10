@@ -125,7 +125,13 @@
     // of the 48 captions in a real twelve-month window run past it, and the
     // ones that do are the long-form posts somebody stops to read.
     likedCaptionChars: 400,
-    savedAuthors: 120,
+    // Fifteen, the same as `likedAuthors` beside it and for the same reason:
+    // past the top dozen a ranked list of accounts flattens into a tail of
+    // ones saved once, which says nothing a follow count does not. The two had
+    // drifted apart — likes went to fifteen and saves stayed at a hundred and
+    // twenty — and a save is if anything the stronger signal per item, since it
+    // is something somebody meant to come back to.
+    savedAuthors: 15,
     topics: 400,
     adInterests: 400,
     // The ceiling on one caption, past which it is clipped rather than
@@ -142,8 +148,17 @@
     // The same watch history shipped as raw titles would be 3.1M chars and
     // $1.33 of input on its own, five times the entire budget.
     youtubeChannels: 50,
-    youtubeTitles: 50,
-    youtubeSearches: 100,
+    // Twenty-five. The priciest item in the Takeout block at 112 characters
+    // apiece against 44 for a channel name, and `topChannels` beside it already
+    // covers the same ground — what a title adds over a channel is the
+    // specificity of one video, which is worth having but not worth twice the
+    // channel list.
+    youtubeTitles: 25,
+    // Forty. This was the last list in the Takeout block still at its original
+    // size while channels, titles and Google searches had all been cut — a
+    // leftover rather than a decision, and it showed: 4,294 characters, the
+    // second-largest thing in a block that had already been halved twice.
+    youtubeSearches: 40,
     googleSearchTerms: 50,
     // Gemini prompts are collected on the device and **not sent**. The text
     // was 15,396 characters at a median of 289 on a real export, and most of
