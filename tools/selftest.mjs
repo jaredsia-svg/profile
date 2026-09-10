@@ -160,7 +160,11 @@ check('grok can list models for discovery', typeof grok.listModels === 'function
               candidates: [{ finishReason: 'STOP' }],
               usageMetadata: {
                 promptTokenCount: 22310, candidatesTokenCount: 8000,
-                thoughtsTokenCount: 0, cachedContentTokenCount: request.config.cachedContent ? 9132 : 0,
+                // Non-zero, because zero is what this field read for as long
+                // as nothing looked at it. Thinking is the larger half of a
+                // real output bill and was being folded into one total.
+                thoughtsTokenCount: 11000,
+                cachedContentTokenCount: request.config.cachedContent ? 9132 : 0,
               },
             };
           })();
@@ -234,6 +238,14 @@ check('grok can list models for discovery', typeof grok.listModels === 'function
   check('the saving is reported back rather than assumed',
     first.usage.cachedTokens === 9132 && second.usage.cachedTokens === 9132,
     JSON.stringify({ first: first.usage.cachedTokens, second: second.usage.cachedTokens }));
+  // The two halves of the output bill, off the response rather than guessed.
+  // The ledger's own checks hand `thinkingTokens` in by name, so they pass
+  // with this end of the wiring deleted — the third time that shape of gap has
+  // turned up in this file, and the reason it is checked here against a stub
+  // response that carries the raw field names Gemini actually sends.
+  check('thinking and report tokens are read off the response as separate numbers',
+    first.usage.thinkingTokens === 11000 && first.usage.outputTokens === 19000,
+    JSON.stringify(first.usage));
 
   // A prompt edit must not be served out of the previous prompt's cache.
   T.reset();
@@ -4880,10 +4892,20 @@ check('a heavy account plus a maxed-out supplement still fits the real budget', 
 
   const row = usage.record('analyse', {
     model: Digest.PRICED_MODEL,
-    usage: { inputTokens: 40000, outputTokens: 9000, cachedTokens: 16000 },
+    usage: { inputTokens: 40000, outputTokens: 9000, thinkingTokens: 6000, cachedTokens: 16000 },
   }, false);
   check('a call is recorded with its tokens, not just that it happened',
     row.input === 40000 && row.output === 9000 && row.cached === 16000, JSON.stringify(row));
+  // Thinking is billed at the output rate and counted inside the output total,
+  // so it is recorded as a part of it rather than beside it. Summed into one
+  // figure — which is how gemini.js reported it until this — an output bill
+  // cannot say whether it is made of reasoning or of report, and those answer
+  // to two completely different knobs.
+  check('and the thinking half of the output is recorded apart from the report half',
+    row.thinking === 6000 && row.thinking < row.output, JSON.stringify(row));
+  check('thinking can never exceed the output it is part of',
+    usage.record('analyse', { model: Digest.PRICED_MODEL,
+      usage: { inputTokens: 1, outputTokens: 100, thinkingTokens: 999 } }, false).thinking === 100);
   // The cached share is the whole point of recording `cached`, so it has to be
   // priced differently from the rest — a ledger that billed a cache hit at the
   // full rate would report the same total whether the cache worked or not,
@@ -4916,10 +4938,12 @@ check('a heavy account plus a maxed-out supplement still fits the real budget', 
   }, true);
   const t = usage.summary(30);
   check('the summary counts every call and splits them by kind',
-    t.calls === 3 && t.byKind.analyse === 2 && t.byKind.premium === 1, JSON.stringify(t.byKind));
-  check('and reports the two numbers it exists for: cost per call and cache share',
-    t.costPerCallUsd > 0 && Math.abs(t.cachedShare - 16000 / 78100) < 0.01,
-    JSON.stringify({ perCall: t.costPerCallUsd, cached: t.cachedShare }));
+    t.calls === 4 && t.byKind.analyse === 3 && t.byKind.premium === 1, JSON.stringify(t.byKind));
+  check('and reports the numbers it exists for: cost per call, cache and thinking share',
+    t.costPerCallUsd > 0 && Math.abs(t.cachedShare - 16000 / 78101) < 0.01 &&
+    t.thinkingShare > 0 && t.thinkingShare < 1,
+    JSON.stringify({ perCall: t.costPerCallUsd, cached: t.cachedShare,
+      thinking: t.thinkingShare }));
 
   // A ledger that threw would turn a report somebody is waiting for into an
   // error. gemini.js applies the same rule to the cache it may fail to create:

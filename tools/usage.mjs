@@ -29,13 +29,16 @@ const rows = [
   ['models', t.models.length ? t.models.join(', ') : '—'],
   ['input tokens', t.input.toLocaleString()],
   ['output tokens', t.output.toLocaleString()],
+  ['  of which thinking', t.output
+    ? t.thinking.toLocaleString() + '  (' + (t.thinkingShare * 100).toFixed(0) + '%)' : '—'],
   ['cache hits', t.input ? (t.cachedShare * 100).toFixed(1) + '% of input tokens' : '—'],
   ['total', money(t.costUsd) + ' (estimated)'],
   ['per call', money(t.costPerCallUsd)],
 ];
 
 console.log('\n  PsycheAI usage\n');
-for (const [label, value] of rows) console.log('  ' + label.padEnd(15) + value);
+const width = Math.max(...rows.map(r => r[0].length)) + 2;
+for (const [label, value] of rows) console.log('  ' + label.padEnd(width) + value);
 
 if (!t.calls) {
   console.log('\n  No calls recorded. Either none have been made, or the ledger at');
@@ -43,10 +46,15 @@ if (!t.calls) {
   console.log('  is not where this process is looking — on a host with an ephemeral');
   console.log('  filesystem it is wiped on every deploy. Set PSYCHEAI_USAGE_STORE to a');
   console.log('  path on a persistent disk.');
-} else if (t.cachedShare < 0.2) {
-  console.log('\n  Cache hits are low. Every profile run sends a system prompt of about');
-  console.log('  15,000 tokens; served from cache it bills at a quarter of the rate.');
-  console.log('  PSYCHEAI_GEMINI_CACHE_TTL defaults to 900 seconds, so at a handful of');
-  console.log('  calls a day the cache has almost always expired before the next one.');
+} else if (t.thinkingShare > 0.5) {
+  console.log('\n  Most of the output bill is thinking, and output bills at five times');
+  console.log('  input. thinkingLevel is set in lib/gemini.js; lowering it is the only');
+  console.log('  knob that reduces this without shortening the report itself. Measure a');
+  console.log('  few runs at the lower level before keeping it.');
+} else if (t.cachedShare < 0.2 && t.cachedShare > 0) {
+  console.log('\n  Cache hits are low, and caching is switched on. Either the TTL is');
+  console.log('  shorter than the gap between calls, or creates are failing. Caching only');
+  console.log('  pays above about one call an hour — see the break-even in lib/gemini.js —');
+  console.log('  so below that, PSYCHEAI_GEMINI_CACHE_TTL=0 is cheaper than a short TTL.');
 }
 console.log('');
